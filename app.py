@@ -2,7 +2,7 @@ import tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, t
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QGuiApplication
 ROOT=Path.home()/'.config/sakura-game-sync'; ROOT.mkdir(parents=True,exist_ok=True)
 DEFAULT=[['Trailmakers','585420','trailmakers.exe','0WJzQWmJyamJTDxct2Tzw8'],['ULTRAKILL','1229490','ultrakill.exe','1bGOkRB37GOYMpr7DGDXxM'],['Minecraft','','net.minecraft.client.main.main|net.fabricmc.loader.impl.launch.knot.knotclient|org.quiltmc.loader.impl.launch.knot.knotclient|net.minecraft.launchwrapper.launch|forgeclient','3zI3N0QdvDVWLQQdsPhUdI'],['Rocket League','252950','rocketleague.exe','6cY3qz1WExXcwKOPfjceO7'],['Desktop','','','6HDaqxkKSPxjhditVm7vx7']]
 def load(name, default):
@@ -94,6 +94,17 @@ class Window(QMainWindow):
   self.vision_status=QLabel('Import mech references, then start capture');self.vision_status.setWordWrap(True);form.addRow(self.vision_status)
   for label,fn in [('Install vision dependencies',self.install_vision),('Import blueprint archive',self.import_archive),('Import mech images',self.import_images),('Start capture',self.start_vision),('Stop capture',self.stop_vision)]:
    b=QPushButton(label);b.clicked.connect(fn);form.addRow(b)
+  self.hud_enabled=QCheckBox('Show combat overlay');self.hud_enabled.setChecked(self.cfg.get('hud_enabled',True));form.addRow(self.hud_enabled)
+  self.hud_screen=QComboBox()
+  for screen in QGuiApplication.screens():self.hud_screen.addItem(screen.name())
+  ix=self.hud_screen.findText(self.cfg.get('hud_screen',''))
+  if ix>=0:self.hud_screen.setCurrentIndex(ix)
+  form.addRow('Trailmakers monitor',self.hud_screen)
+  self.hud=QLabel(None,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.WindowTransparentForInput|Qt.WindowType.WindowDoesNotAcceptFocus)
+  self.hud.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating);self.hud.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+  self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
+  self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
+  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(500)
   layout.addWidget(group)
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:9px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
@@ -158,6 +169,22 @@ class Window(QMainWindow):
    for p in files:self.stage(p,Path(p).read_bytes())
    self.vision_status.setText('References saved. Start capture to index.')
   except OSError as e:self.vision_status.setText(str(e))
+ def refresh_hud(self,*args):
+  if not self.hud_enabled.isChecked() or not self.capture_requested:
+   self.hud.hide();return
+  screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
+  if screen is None:self.hud.hide();return
+  locked=self.combat_latched
+  stale=not self.last_frame or time.monotonic()-self.last_frame>5
+  n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
+  state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('CONFIRMING MECH' if n else 'SCANNING'))
+  color='#f18ca5' if locked else ('#eac17b' if n else '#a4dbd2')
+  self.hud.setStyleSheet('QLabel{background:rgba(20,22,30,210);border:1px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
+  self.hud.setText('SAKURA  /  '+state+'\nEvidence '+str(n)+'/3  |  '+('Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack'))
+  self.hud.winId()
+  if self.hud.windowHandle().screen()!=screen:self.hud.windowHandle().setScreen(screen)
+  g=screen.availableGeometry();self.hud.move(g.x()+g.width()-self.hud.width()-20,g.y()+24)
+  if not self.hud.isVisible():self.hud.show()
  def start_vision(self):
   if self.busy or not self.persist():return
   try:
@@ -168,11 +195,14 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
+   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
+   if screen is not None:self.vision.capture.setScreen(screen)
    self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
   self.evidence=[];self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
+  self.hud.hide()
  def on_mech(self,score):
   if not self.capture_requested:return
   now=time.monotonic()
@@ -204,7 +234,7 @@ class Window(QMainWindow):
    if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
    for r in rows:uri(r[3])
   except ValueError as e:self.log.setText(str(e));return False
-  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
+  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value(),hud_enabled=self.hud_enabled.isChecked(),hud_screen=self.hud_screen.currentText());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
  def job(self,fn,callback=None):
   if self.busy:return
   self.busy=True;self.callback=callback
