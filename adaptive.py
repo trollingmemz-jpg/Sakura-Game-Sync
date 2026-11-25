@@ -2,12 +2,12 @@
 import time, threading
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtMultimedia import QScreenCapture,QMediaCaptureSession,QVideoSink
+from PySide6.QtMultimedia import QWindowCapture,QMediaCaptureSession,QVideoSink
 class Vision(QObject):
  report=Signal(str)
  detected=Signal(float)
  def __init__(self,parent=None):
-  super().__init__(parent);self.capture=QScreenCapture(self);self.session=QMediaCaptureSession(self);self.sink=QVideoSink(self);self.session.setScreenCapture(self.capture);self.session.setVideoSink(self.sink);self.sink.videoFrameChanged.connect(self.frame);self.capture.errorOccurred.connect(lambda *a:self.report.emit(str(a[-1])));self.refs=[];self.busy=False;self.last=0;self.generation=0
+  super().__init__(parent);self.capture=QWindowCapture(self);self.session=QMediaCaptureSession(self);self.sink=QVideoSink(self);self.session.setWindowCapture(self.capture);self.session.setVideoSink(self.sink);self.sink.videoFrameChanged.connect(self.frame);self.capture.errorOccurred.connect(lambda *a:self.report.emit(str(a[-1])));self.refs=[];self.busy=False;self.last=0;self.generation=0
  def load(self,files):
   import cv2,numpy as np
   orb=cv2.ORB_create(nfeatures=1000);refs=[]
@@ -23,6 +23,9 @@ class Vision(QObject):
   self.refs=refs;self.report.emit(f'{len(refs)} reference feature sets indexed')
  def start(self):
   if not self.refs:raise RuntimeError('Import mech references first.')
+  windows=[w for w in QWindowCapture.capturableWindows() if w.isValid() and w.description().strip().lower()=='trailmakers']
+  if not windows:raise RuntimeError('Trailmakers window capture unavailable on this Qt/Wayland backend. Desktop capture disabled for safety.')
+  self.capture.setWindow(windows[0])
   self.generation+=1;self.capture.setActive(True)
  def stop(self):
   self.generation+=1;self.capture.setActive(False)
