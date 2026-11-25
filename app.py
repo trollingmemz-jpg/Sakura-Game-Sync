@@ -124,6 +124,14 @@ class Window(QMainWindow):
   self.vision_status=QLabel('Import mech references, then start capture');self.vision_status.setWordWrap(True);form.addRow(self.vision_status)
   for label,fn in [('Install vision dependencies',self.install_vision),('Import blueprint archive',self.import_archive),('Import mech images',self.import_images),('Start capture',self.start_vision),('Stop capture',self.stop_vision)]:
    b=QPushButton(label);b.clicked.connect(fn);form.addRow(b)
+  from rgb_sync import RGBSync
+  self.rgb_sync=RGBSync(self)
+  self.rgb_enabled=QCheckBox('Synchronise physical RGB');self.rgb_enabled.setChecked(self.cfg.get('rgb_enabled',False));form.addRow(self.rgb_enabled)
+  self.rgb_keyboard=QCheckBox('Keyboard');self.rgb_keyboard.setChecked(self.cfg.get('rgb_keyboard',True));form.addRow(self.rgb_keyboard)
+  self.rgb_ram=QCheckBox('RAM');self.rgb_ram.setChecked(self.cfg.get('rgb_ram',True));form.addRow(self.rgb_ram)
+  self.rgb_mouse=QCheckBox('Harpoon mouse');self.rgb_mouse.setChecked(self.cfg.get('rgb_mouse',True));form.addRow(self.rgb_mouse)
+  self.rgb_status=QLabel('RGB sync off');self.rgb_status.setWordWrap(True);form.addRow(self.rgb_status);self.rgb_sync.report.connect(self.rgb_status.setText)
+  self.rgb_timer=QTimer(self);self.rgb_timer.timeout.connect(self.refresh_rgb);self.rgb_timer.start(100)
   self.hud_enabled=QCheckBox('Show combat overlay');self.hud_enabled.setChecked(self.cfg.get('hud_enabled',True));form.addRow(self.hud_enabled)
   self.hud_screen=QComboBox()
   for screen in QGuiApplication.screens():self.hud_screen.addItem(screen.name())
@@ -201,6 +209,9 @@ class Window(QMainWindow):
    for p in files:self.stage(p,Path(p).read_bytes())
    self.vision_status.setText('References saved. Start capture to index.')
   except OSError as e:self.vision_status.setText(str(e))
+ def refresh_rgb(self):
+  locked=self.combat_latched and time.monotonic()-self.last_mech<20
+  self.rgb_sync.update(self.rgb_enabled.isChecked() and self.capture_requested,locked,self.rgb_keyboard.isChecked(),self.rgb_ram.isChecked(),self.rgb_mouse.isChecked())
  def refresh_hud(self,*args):
   visible=self.hud_enabled.isChecked() and self.capture_requested
   proc=getattr(self,'overlay_proc',None)
@@ -272,7 +283,7 @@ class Window(QMainWindow):
    if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
    for r in rows:uri(r[3])
   except ValueError as e:self.log.setText(str(e));return False
-  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value(),hud_enabled=self.hud_enabled.isChecked(),hud_screen=self.hud_screen.currentText());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
+  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value(),hud_enabled=self.hud_enabled.isChecked(),hud_screen=self.hud_screen.currentText(),rgb_enabled=self.rgb_enabled.isChecked(),rgb_keyboard=self.rgb_keyboard.isChecked(),rgb_ram=self.rgb_ram.isChecked(),rgb_mouse=self.rgb_mouse.isChecked());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
  def job(self,fn,callback=None):
   if self.busy:return
   self.busy=True;self.callback=callback
@@ -339,7 +350,7 @@ class Window(QMainWindow):
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
   else:self.hide();e.ignore()
- def quit(self):self.stop_vision();self.quitting=True;QApplication.quit()
+ def quit(self):self.stop_vision();self.rgb_sync.stop.set();self.quitting=True;QApplication.quit()
 if __name__=='__main__':
  from PySide6.QtCore import QLockFile
  app=QApplication(sys.argv);lock=QLockFile(str(ROOT/'instance.lock'));lock.setStaleLockTime(0)
