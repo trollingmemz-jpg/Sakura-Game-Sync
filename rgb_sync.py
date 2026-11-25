@@ -42,17 +42,16 @@ class RGBSync(QObject):
     retry=now+8
     try:
      from openrgb import OpenRGBClient
-     from openrgb.utils import DeviceType
-     client=OpenRGBClient('127.0.0.1',6743,'Sakura Game Sync')
+     client=OpenRGBClient('127.0.0.1',6743)
      for d in client.devices:
-      if (keyboard and d.type==DeviceType.KEYBOARD) or (ram and d.type==DeviceType.DRAM):
-       d.set_custom_mode();devices.append(d)
+      if (keyboard and int(d.type)==5) or (ram and int(d.type)==1):
+       devices.append(d) # OpenLinkHub exposes only Direct mode; already selected
     except Exception as e:
      disconnect();errors.append('SDK: '+str(e))
    if client and rgb!=last_sdk:
     try:
      from openrgb.utils import RGBColor
-     for d in devices:d.set_color(RGBColor(*rgb),fast=True)
+     for d in devices:d.set_colors([RGBColor(*rgb) for _ in d.leds],fast=True)
      last_sdk=rgb
     except Exception as e:
      disconnect();retry=now+8;errors.append('SDK: '+str(e))
