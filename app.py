@@ -218,7 +218,7 @@ class Window(QMainWindow):
   except OSError as e:self.vision_status.setText(str(e))
  def refresh_rgb(self):
   locked=self.combat_latched and time.monotonic()-self.last_mech<20
-  self.rgb_sync.update(self.rgb_enabled.isChecked() and self.capture_requested,locked,self.rgb_keyboard.isChecked(),self.rgb_ram.isChecked(),self.rgb_mouse.isChecked())
+  self.rgb_sync.update(self.rgb_enabled.isChecked(),locked and self.capture_requested,self.rgb_keyboard.isChecked(),self.rgb_ram.isChecked(),self.rgb_mouse.isChecked(),self.capture_requested)
  def refresh_hud(self,*args):
   visible=self.hud_enabled.isChecked() and self.capture_requested
   proc=getattr(self,'overlay_proc',None)
