@@ -123,12 +123,12 @@ class Window(QMainWindow):
   for label,fn in [('Add game',lambda:self.add(['New game','','',''])),('Remove selected',self.remove),('Save mappings',self.persist),('Play selected',self.manual),('Retry detection',self.retry)]:
    b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
   layout.addLayout(bar); settings=QGroupBox('Spotify connection');f=QFormLayout(settings);self.client=QLineEdit(self.sp.client);self.client.setPlaceholderText('Spotify developer application client ID');f.addRow('Client ID',self.client);self.device=QComboBox();self.device.setEditable(True);self.device.addItem(self.cfg.get('device',''));f.addRow('Playback device (blank = active)',self.device);b=QPushButton('Connect Spotify');b.clicked.connect(self.login);r=QPushButton('Refresh devices');r.clicked.connect(self.devices);f.addRow(b,r);layout.addWidget(settings)
-  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False;self.combat_latched=False;self.combat_sent=False;self.clear_since=None;self.hit_since=None;self.evidence=[]
-  group=QGroupBox('Adaptive combat — experimental');form=QFormLayout(group)
+  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False;self.combat_latched=False;self.combat_sent=False;self.clear_since=None;self.hit_since=None;self.evidence=[];self.auto_capture_attempted=False;self.tm_seen_since=None
+  self.vision_status=QLabel('Scanner ready — waiting for Trailmakers');self.vision_status.setWordWrap(True);layout.addWidget(self.vision_status)
+  group=QGroupBox('Scanning and RGB settings');form=QFormLayout(group)
   self.adaptive=QCheckBox('Enable mech soundtrack');self.adaptive.setChecked(self.cfg.get('adaptive',False));form.addRow(self.adaptive)
   self.combat=QLineEdit(self.cfg.get('combat',''));form.addRow('Combat playlist URL',self.combat)
   self.threshold=QSpinBox();self.threshold.setRange(8,100);self.threshold.setValue(self.cfg.get('threshold',12));form.addRow('Matching threshold',self.threshold)
-  self.vision_status=QLabel('Import mech references, then start capture');self.vision_status.setWordWrap(True);form.addRow(self.vision_status)
   for label,fn in [('Install vision dependencies',self.install_vision),('Import blueprint archive',self.import_archive),('Import mech images',self.import_images),('Start capture',self.start_vision),('Stop capture',self.stop_vision)]:
    b=QPushButton(label);b.setMinimumHeight(36);b.clicked.connect(fn);form.addRow(b)
   from rgb_sync import RGBSync
@@ -151,7 +151,11 @@ class Window(QMainWindow):
   self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
   self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
   self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(40)
-  layout.addWidget(group)
+  advanced=QToolButton();advanced.setText('Scanning and RGB settings');advanced.setCheckable(True);advanced.setChecked(False);advanced.setArrowType(Qt.ArrowType.RightArrow);advanced.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon);layout.addWidget(advanced)
+  layout.addWidget(group);group.hide()
+  def toggle_advanced(opened):
+   group.setVisible(opened);advanced.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
+  advanced.toggled.connect(toggle_advanced)
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:7px;min-height:20px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
   self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(3000)
@@ -247,7 +251,9 @@ class Window(QMainWindow):
   state=dict(time=time.time(),visible=True,locked=locked,status=status,evidence=n,music='Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack')
   tmp=ROOT/'overlay-state.tmp';tmp.write_text(json.dumps(state));tmp.replace(ROOT/'overlay-state.json')
  def start_vision(self):
-  if self.busy or not self.persist():return
+  if self.capture_requested or self.busy:return
+  self.auto_capture_attempted=True
+  if not self.persist():return
   try:
    uri(self.combat.text())
    if 'Trailmakers' not in scan(self.rows):raise RuntimeError('Open Trailmakers first.')
@@ -256,12 +262,13 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
-   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.overlay_failed=False;self.vision.start()
-  except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
+   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.combat_latched=False;self.combat_sent=False;self.capture_requested=True;self.overlay_failed=False;self.vision.start();self.vision_status.setText('Select the Trailmakers window if screen sharing asks for permission.')
+  except Exception as e:self.stop_vision();self.vision_status.setText('Scanner: '+str(e))
  def stop_vision(self):
   self.evidence=[];self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
   self.hud.hide();self.hue.hide();self.refresh_hud()
+  self.vision_status.setText('Scanner stopped — use scanning settings to restart, or relaunch Trailmakers.')
  def on_mech(self,score):
   if not self.capture_requested:return
   now=time.monotonic()
@@ -322,8 +329,21 @@ class Window(QMainWindow):
   now=time.monotonic()
   if self.combat_latched and now-self.last_mech>=20:
    self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
-  if self.busy:return
   found=scan(self.rows)
+  tm_running='Trailmakers' in found
+  if not tm_running:
+   if self.capture_requested:self.stop_vision()
+   if self.tm_seen_since is not None:self.vision_status.setText('Scanner ready — waiting for Trailmakers')
+   self.tm_seen_since=None;self.auto_capture_attempted=False
+  else:
+   if self.tm_seen_since is None:self.tm_seen_since=now
+   if self.capture_requested and self.vision and self.vision.proc and self.vision.proc.poll() is not None:
+    self.stop_vision();self.vision_status.setText('Window capture ended — open scanning settings to restart.')
+   if not self.adaptive.isChecked():
+    if self.capture_requested:self.stop_vision()
+   elif not self.capture_requested and not self.auto_capture_attempted and not self.busy and now-self.tm_seen_since>=6:
+    self.start_vision()
+  if self.busy:return
   target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop')
   self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
   if 'Trailmakers' not in found:
