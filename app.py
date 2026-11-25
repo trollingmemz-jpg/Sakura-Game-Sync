@@ -159,6 +159,18 @@ class Window(QMainWindow):
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:7px;min-height:20px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
   self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(3000)
+  self.dashboard_timer=QTimer(self);self.dashboard_timer.timeout.connect(self.dashboard_sync);self.dashboard_timer.start(1000)
+  self.dashboard_sync()
+ def dashboard_sync(self):
+  try:
+   locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
+   save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
+   request=ROOT/'dashboard-show.request'
+   if request.exists():
+    fresh=time.time()-request.stat().st_mtime<15
+    request.unlink()
+    if fresh:self.showNormal();self.raise_();self.activateWindow()
+  except OSError:pass
  def update_app(self):
   if self.busy:return
   if not self.persist():return
