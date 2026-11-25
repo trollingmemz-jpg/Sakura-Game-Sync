@@ -37,7 +37,10 @@ class Vision(QObject):
    try:
     import cv2,numpy as np
     rgb=np.frombuffer(data,np.uint8).reshape(h,stride)[:,:w*3].reshape(h,w,3)
-    k,d=cv2.ORB_create(nfeatures=1500).detectAndCompute(cv2.cvtColor(rgb,cv2.COLOR_RGB2GRAY),None);best=0
+    gray=cv2.cvtColor(rgb,cv2.COLOR_RGB2GRAY)
+    exclusion=np.full(gray.shape,255,np.uint8)
+    exclusion[int(h*.78):,:int(w*.28)]=0
+    k,d=cv2.ORB_create(nfeatures=1500).detectAndCompute(gray,exclusion);best=0
     if d is not None and len(d)>=2:
      pts=np.float32([x.pt for x in k]);matcher=cv2.BFMatcher(cv2.NORM_HAMMING)
      for rp,rd in refs:
