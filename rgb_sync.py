@@ -6,13 +6,13 @@ class RGBSync(QObject):
  report=Signal(str)
  def __init__(self,parent=None):
   super().__init__(parent)
-  self.state=(False,False,True,True,True)
+  self.state=(False,False,True,True,True,False)
   self.stop=threading.Event()
   threading.Thread(target=self.run,daemon=True).start()
- def update(self,enabled,locked,keyboard,ram,mouse):
-  self.state=(enabled,locked,keyboard,ram,mouse)
+ def update(self,enabled,locked,keyboard,ram,mouse,scanning=True):
+  self.state=(enabled,locked,keyboard,ram,mouse,scanning)
  def run(self):
-  client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status=''
+  client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(238.,156.,190.)
   def report(msg):
    nonlocal last_status
    if msg!=last_status:self.report.emit(msg);last_status=msg
@@ -23,7 +23,7 @@ class RGBSync(QObject):
     except Exception:pass
    client=None;devices=[];last_sdk=None
   while not self.stop.wait(.10):
-   enabled,locked,keyboard,ram,mouse=self.state
+   enabled,locked,keyboard,ram,mouse,scanning=self.state
    now=time.monotonic()
    if not enabled:
     if previous is not None:
@@ -36,7 +36,9 @@ class RGBSync(QObject):
    if abs(mix-(1. if locked else 0.))<.01:mix=1. if locked else 0.
    pulse=(1+math.sin(now*math.tau/2.4))/2
    strength=.40+.60*pulse
-   rgb=tuple(round(a*(1-mix)+b*mix*strength) for a,b in zip((55,214,198),(255,20,20)))
+   target_base=(55,214,198) if scanning else (238,156,190)
+   base=tuple(a+(b-a)*.35 if abs(b-a)>=.5 else float(b) for a,b in zip(base,target_base))
+   rgb=tuple(round(a*(1-mix)+b*mix*strength) for a,b in zip(base,(255,20,20)))
    errors=[]
    if (keyboard or ram) and client is None and now>=retry:
     retry=now+8
