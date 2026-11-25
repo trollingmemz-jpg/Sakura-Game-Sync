@@ -1,4 +1,4 @@
-import tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
+import math, tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
@@ -104,7 +104,7 @@ class Window(QMainWindow):
   self.hud.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating);self.hud.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
   self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
   self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
-  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(500)
+  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(80)
   layout.addWidget(group)
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:9px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
@@ -174,12 +174,14 @@ class Window(QMainWindow):
    self.hud.hide();return
   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
   if screen is None:self.hud.hide();return
-  locked=self.combat_latched
+  locked=self.combat_latched or self.active=='Mech combat'
   stale=not self.last_frame or time.monotonic()-self.last_frame>5
   n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
   state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('CONFIRMING MECH' if n else 'SCANNING'))
-  color='#f18ca5' if locked else ('#eac17b' if n else '#a4dbd2')
-  self.hud.setStyleSheet('QLabel{background:rgba(20,22,30,210);border:1px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
+  pulse=(1+math.sin(time.monotonic()*math.tau/2.4))/2
+  color=f'#ff{int(65+55*pulse):02x}{int(65+55*pulse):02x}' if locked else '#55d6c6'
+  bg=f'rgba({int(48+40*pulse)},18,24,215)' if locked else 'rgba(15,42,43,205)'
+  self.hud.setStyleSheet('QLabel{background:'+bg+';border:2px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
   self.hud.setText('SAKURA  /  '+state+'\nEvidence '+str(n)+'/3  |  '+('Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack'))
   self.hud.winId()
   if self.hud.windowHandle().screen()!=screen:self.hud.windowHandle().setScreen(screen)
