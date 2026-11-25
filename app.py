@@ -1,6 +1,7 @@
 import math, tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
 from pathlib import Path
 from token_lock import token_lock
+from windows_games import Detector
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QGuiApplication, QLinearGradient
@@ -113,7 +114,7 @@ class CombatHue(QWidget):
    self.raise_()
 class Window(QMainWindow):
  def __init__(self):
-  super().__init__();self.setWindowTitle('Sakura • Game Sync');self.resize(980,660);self.cfg=load('settings.json',{});self.rows=load('games.json',DEFAULT);self.sp=Spotify();self.sp.client=self.cfg.get('client','');self.busy=False;self.active=None;self.candidate=None;self.count=0;self.bridge=Bridge();self.bridge.done.connect(self.complete);self.callback=None;self.quitting=False
+  super().__init__();self.setWindowTitle('Sakura • Game Sync');self.resize(980,660);self.cfg=load('settings.json',{});self.rows=load('games.json',DEFAULT);self.detector=Detector();self.detector.rows=self.rows;self.sp=Spotify();self.sp.client=self.cfg.get('client','');self.busy=False;self.active=None;self.candidate=None;self.count=0;self.bridge=Bridge();self.bridge.done.connect(self.complete);self.callback=None;self.quitting=False
   central=QWidget();scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame);scroll.setWidget(central);self.setCentralWidget(scroll);layout=QVBoxLayout(central);layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize);layout.setContentsMargins(28,24,28,24);layout.setSpacing(14)
   title=QLabel('SAKURA  /  GAME SYNC');title.setObjectName('heading');layout.addWidget(title);self.status=QLabel('Ready • waiting for game detection');layout.addWidget(self.status)
   bar=QHBoxLayout();self.enabled=QCheckBox('Automatic switching');self.enabled.setChecked(self.cfg.get('enabled',False));self.shuffle=QCheckBox('Shuffle');self.shuffle.setChecked(self.cfg.get('shuffle',True));self.fallback=QCheckBox('Desktop playlist on game exit');self.fallback.setChecked(self.cfg.get('fallback',True));bar.addWidget(self.enabled);bar.addWidget(self.shuffle);bar.addWidget(self.fallback);bar.addStretch();layout.addLayout(bar)
@@ -138,7 +139,7 @@ class Window(QMainWindow):
   self.rgb_ram=QCheckBox('RAM');self.rgb_ram.setChecked(self.cfg.get('rgb_ram',True));form.addRow(self.rgb_ram)
   self.rgb_mouse=QCheckBox('Harpoon mouse');self.rgb_mouse.setChecked(self.cfg.get('rgb_mouse',True));form.addRow(self.rgb_mouse)
   self.rgb_status=QLabel('RGB sync off');self.rgb_status.setWordWrap(True);form.addRow(self.rgb_status);self.rgb_sync.report.connect(self.rgb_status.setText)
-  self.rgb_timer=QTimer(self);self.rgb_timer.timeout.connect(self.refresh_rgb);self.rgb_timer.start(100)
+  self.rgb_timer=QTimer(self);self.rgb_timer.timeout.connect(self.refresh_rgb);self.rgb_timer.start(250)
   self.hud_enabled=QCheckBox('Show combat overlay');self.hud_enabled.setChecked(self.cfg.get('hud_enabled',True));form.addRow(self.hud_enabled)
   self.hud_screen=QComboBox()
   for screen in QGuiApplication.screens():self.hud_screen.addItem(screen.name())
@@ -150,7 +151,7 @@ class Window(QMainWindow):
   self.hud.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
   self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
   self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
-  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(40)
+  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(40) if os.name!='nt' else None
   advanced=QToolButton();advanced.setText('Scanning and RGB settings');advanced.setCheckable(True);advanced.setChecked(False);advanced.setArrowType(Qt.ArrowType.RightArrow);advanced.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon);layout.addWidget(advanced)
   layout.addWidget(group);group.hide()
   def toggle_advanced(opened):
@@ -184,13 +185,16 @@ class Window(QMainWindow):
   except (ValueError,TypeError):pass
   try:
    locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
+   save('steam-library.json',self.detector.games) if getattr(self,'published_library',None)!=self.detector.games else None
+   self.published_library=self.detector.games
    save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
    request=ROOT/'dashboard-advanced.request'
    if request.exists() and not self.busy:
     data=load(request.name,{})
     request.unlink()
     action=data.get('action')
-    if action=='login':
+    if action=='discover':self.detector.refresh.set()
+    elif action=='login':
      self.client.setText(str(data.get('client','')).strip())
      self.login()
     elif action=='mappings':
@@ -198,7 +202,8 @@ class Window(QMainWindow):
      try:
       if not isinstance(rows,list) or not rows or any(not isinstance(r,list) or len(r)!=4 or not all(isinstance(v,str) for v in r) for r in rows):raise ValueError('Invalid game mappings')
       if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
-      for row in rows:uri(row[3])
+      for row in rows:
+       if row[3]:uri(row[3])
       self.table.setRowCount(0)
       for row in rows:self.add(row)
       self.persist()
@@ -384,7 +389,7 @@ class Window(QMainWindow):
   if not self.persist():return
   try:
    uri(self.combat.text())
-   if 'Trailmakers' not in scan(self.rows):raise RuntimeError('Open Trailmakers first.')
+   if 'Trailmakers' not in self.detector.result:raise RuntimeError('Open Trailmakers first.')
    import cv2
    from adaptive import Vision
    if self.vision is None:
@@ -423,9 +428,10 @@ class Window(QMainWindow):
   rows=[[self.table.item(i,j).text().strip() if self.table.item(i,j) else '' for j in range(4)] for i in range(self.table.rowCount())]
   try:
    if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
-   for r in rows:uri(r[3])
+   for r in rows:
+    if r[3]:uri(r[3])
   except ValueError as e:self.log.setText(str(e));return False
-  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value(),hud_enabled=self.hud_enabled.isChecked(),hud_screen=self.hud_screen.currentText(),rgb_enabled=self.rgb_enabled.isChecked(),rgb_keyboard=self.rgb_keyboard.isChecked(),rgb_ram=self.rgb_ram.isChecked(),rgb_mouse=self.rgb_mouse.isChecked());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
+  self.rows=rows;self.detector.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value(),hud_enabled=self.hud_enabled.isChecked(),hud_screen=self.hud_screen.currentText(),rgb_enabled=self.rgb_enabled.isChecked(),rgb_keyboard=self.rgb_keyboard.isChecked(),rgb_ram=self.rgb_ram.isChecked(),rgb_mouse=self.rgb_mouse.isChecked());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
  def job(self,fn,callback=None):
   if self.busy:return
   self.busy=True;self.callback=callback
@@ -457,7 +463,7 @@ class Window(QMainWindow):
   now=time.monotonic()
   if self.combat_latched and now-self.last_mech>=20:
    self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
-  found=scan(self.rows)
+  self.detector.rows=self.rows;found=self.detector.result.copy()
   tm_running='Trailmakers' in found
   if not tm_running:
    if self.capture_requested:self.stop_vision()
@@ -493,7 +499,7 @@ class Window(QMainWindow):
   if target=='Desktop' and (self.active is None or not self.fallback.isChecked()):self.active=target;return
   row=next((r for r in self.rows if r[0]==target),None)
   playlist=self.combat.text().strip() if target=='Mech combat' else (row[3] if row else '')
-  if not playlist:return
+  if not playlist:self.active=target;return
   try:uri(playlist)
   except ValueError as e:self.log.setText(str(e));self.retry_after=now+30;return
   device=self.device.currentText().strip();shuffle=self.shuffle.isChecked()
@@ -507,7 +513,7 @@ class Window(QMainWindow):
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
   else:self.hide();e.ignore()
- def quit(self):self.stop_vision();self.rgb_sync.stop.set();self.quitting=True;QApplication.quit()
+ def quit(self):self.detector.stop.set();self.stop_vision();self.rgb_sync.stop.set();self.quitting=True;QApplication.quit()
 if __name__=='__main__':
  from PySide6.QtCore import QLockFile
  app=QApplication(sys.argv);lock=QLockFile(str(ROOT/'instance.lock'));lock.setStaleLockTime(0)
