@@ -181,13 +181,19 @@ class Window(QMainWindow):
      if isinstance(color,list) and len(color)==3 and all(type(x)==int and 0<=x<=255 for x in color):profile[key]=tuple(color)
     for key in ('keyboard','ram','mouse'):
      profile[key]=bool(raw.get(key,True))
+   profiles=load('game-profiles.json',{})
+   selected=profiles.get(getattr(self,'detected_game','Desktop'),{}) if isinstance(profiles,dict) else {}
+   if profile.get('mode')=='auto' and isinstance(selected,dict) and selected.get('enabled') and selected.get('rgb_enabled'):
+    value=selected.get('rgb','')
+    if isinstance(value,str) and re.fullmatch(r'#[0-9a-fA-F]{6}',value):
+     rgb=tuple(int(value[i:i+2],16) for i in (1,3,5));profile.update(idle=rgb,scanning=rgb)
    self.dashboard_rgb=profile
   except (ValueError,TypeError):pass
   try:
    locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
    save('steam-library.json',self.detector.games) if getattr(self,'published_library',None)!=self.detector.games else None
    self.published_library=self.detector.games
-   save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
+   save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),detected_game=getattr(self,'detected_game','Desktop'),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
    request=ROOT/'dashboard-advanced.request'
    if request.exists() and not self.busy:
     data=load(request.name,{})
@@ -464,6 +470,8 @@ class Window(QMainWindow):
   if self.combat_latched and now-self.last_mech>=20:
    self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
   self.detector.rows=self.rows;found=self.detector.result.copy()
+  previous=getattr(self,'detected_game','Desktop')
+  self.detected_game=previous if previous in found else next((r[0] for r in self.rows if r[0] in found),next(iter(sorted(found)),'Desktop'))
   tm_running='Trailmakers' in found
   if not tm_running:
    if self.capture_requested:self.stop_vision()
