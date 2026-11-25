@@ -202,24 +202,32 @@ class Window(QMainWindow):
    self.vision_status.setText('References saved. Start capture to index.')
   except OSError as e:self.vision_status.setText(str(e))
  def refresh_hud(self,*args):
-  if not self.hud_enabled.isChecked() or not self.capture_requested:
-   self.hud.hide();self.hue.hide();return
-  screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
-  if screen is None:self.hud.hide();self.hue.hide();return
-  locked=self.combat_latched and time.monotonic()-self.last_mech<20
-  stale=not self.last_frame or time.monotonic()-self.last_frame>5
-  n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
-  state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('RESTORING MUSIC' if self.active=='Mech combat' else ('CONFIRMING MECH' if n else 'SCANNING')))
-  pulse=(1+math.sin(time.monotonic()*math.tau/2.4))/2
-  self.hue.mix+=((1. if locked else 0.)-self.hue.mix)*.14
-  self.hue.pulse=pulse;self.hue.display_on(screen);self.hue.update()
-  color=f'#ff{int(65+55*pulse):02x}{int(65+55*pulse):02x}' if locked else '#55d6c6'
-  bg=f'rgba({int(48+40*pulse)},18,24,215)' if locked else 'rgba(15,42,43,205)'
-  self.hud.setStyleSheet('QLabel{background:'+bg+';border:2px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
-  self.hud.setText('SAKURA  /  '+state+'\nEvidence '+str(n)+'/3  |  '+('Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack'))
-  self.hud.move(max(0,self.hue.width()-self.hud.width()-20),24)
-  if not self.hud.isVisible():self.hud.show()
-  self.hud.raise_()
+  visible=self.hud_enabled.isChecked() and self.capture_requested
+  proc=getattr(self,'overlay_proc',None)
+  if not visible:
+   if proc and proc.poll() is None:proc.terminate()
+   self.overlay_proc=None
+   return
+  if proc is None:
+   try:
+    self.overlay_log=open(ROOT/'overlay.log','w')
+    self.overlay_proc=subprocess.Popen(['/usr/bin/python3',str(Path(__file__).with_name('layer_hue.py')),str(ROOT/'overlay-state.json')],stdout=self.overlay_log,stderr=subprocess.STDOUT)
+    self.overlay_log.close()
+   except OSError as e:self.vision_status.setText('Overlay launch failed: '+str(e));return
+  elif proc.poll() is not None:
+   if not getattr(self,'overlay_failed',False):
+    self.overlay_failed=True
+    self.log.setText('Overlay exited; see ~/.config/sakura-game-sync/overlay.log')
+   return
+  now=time.monotonic()
+  locked=self.combat_latched and now-self.last_mech<20
+  stale=not self.last_frame or now-self.last_frame>5
+  n=min(3,sum(now-t<=8 for t in self.evidence))
+  status='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('RESTORING MUSIC' if self.active=='Mech combat' else ('CONFIRMING MECH' if n else 'SCANNING')))
+  if now-getattr(self,'overlay_last_write',0)<.15:return
+  self.overlay_last_write=now
+  state=dict(time=time.time(),visible=True,locked=locked,status=status,evidence=n,music='Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack')
+  tmp=ROOT/'overlay-state.tmp';tmp.write_text(json.dumps(state));tmp.replace(ROOT/'overlay-state.json')
  def start_vision(self):
   if self.busy or not self.persist():return
   try:
@@ -230,12 +238,12 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
-   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.vision.start()
+   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.overlay_failed=False;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
   self.evidence=[];self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
-  self.hud.hide();self.hue.hide()
+  self.hud.hide();self.hue.hide();self.refresh_hud()
  def on_mech(self,score):
   if not self.capture_requested:return
   now=time.monotonic()
