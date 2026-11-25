@@ -1,9 +1,10 @@
 import math, tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
 from pathlib import Path
+from token_lock import token_lock
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QGuiApplication, QLinearGradient
-ROOT=Path.home()/'.config/sakura-game-sync'; ROOT.mkdir(parents=True,exist_ok=True)
+ROOT=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state'; ROOT.mkdir(parents=True,exist_ok=True)
 DEFAULT=[['Trailmakers','585420','trailmakers.exe','0WJzQWmJyamJTDxct2Tzw8'],['ULTRAKILL','1229490','ultrakill.exe','1bGOkRB37GOYMpr7DGDXxM'],['Minecraft','','net.minecraft.client.main.main|net.fabricmc.loader.impl.launch.knot.knotclient|org.quiltmc.loader.impl.launch.knot.knotclient|net.minecraft.launchwrapper.launch|forgeclient','3zI3N0QdvDVWLQQdsPhUdI'],['Rocket League','252950','rocketleague.exe','6cY3qz1WExXcwKOPfjceO7'],['Desktop','','','6HDaqxkKSPxjhditVm7vx7']]
 def load(name, default):
  try:return json.loads((ROOT/name).read_text())
@@ -17,17 +18,14 @@ def uri(s):
  if not m:raise ValueError('Use a Spotify playlist link, URI or ID.')
  return 'spotify:playlist:'+m[1]
 def scan(rows):
+ import psutil
  found=set()
- for p in Path('/proc').iterdir():
-  if not p.name.isdigit():continue
+ for p in psutil.process_iter(['name','cmdline']):
   try:
-   if p.stat().st_uid!=os.getuid():continue
-   cmd=(p/'cmdline').read_bytes().decode(errors='replace').lower().split('\0'); env=(p/'environ').read_bytes().split(b'\0')
-   ids={x.split(b'=',1)[1].decode(errors='ignore') for x in env if x.startswith((b'SteamAppId=',b'SteamGameId='))}
+   cmd=' '.join([p.info.get('name') or '',*(p.info.get('cmdline') or [])]).lower()
    for name,appid,patterns,_ in rows:
-    if name=='Desktop':continue
-    if (appid and appid in ids) or any(x and any(x.lower() in a for a in cmd) for x in patterns.split('|')):found.add(name)
-  except (OSError,ValueError):pass
+    if name!='Desktop' and any(x and x.lower() in cmd for x in patterns.split('|')):found.add(name)
+  except (psutil.Error,OSError):pass
  return found
 class Spotify:
  def __init__(self):self.token=load('token.json',{}); self.client=''
@@ -53,10 +51,8 @@ class Spotify:
   if 'code' not in result:raise RuntimeError('Spotify sign-in cancelled or timed out.')
   self.token={};self.exchange(dict(client_id=client,grant_type='authorization_code',code=result['code'][0],redirect_uri=redirect,code_verifier=verifier))
  def call(self,path,method='GET',body=None):
-  import fcntl
-  with open(ROOT/'spotify-token.lock','a') as guard:
-   fcntl.flock(guard,fcntl.LOCK_EX)
-   self.token=load('token.json',{})
+  with token_lock(ROOT/'spotify-token.lock'):
+   self.token=load('token.json',{});self.client=load('settings.json',{}).get('client',self.client)
    if not self.client or not self.token.get('refresh_token'):raise RuntimeError('Connect Spotify in Settings first.')
    if time.time()>self.token.get('expires_at',0)-60:self.exchange(dict(client_id=self.client,grant_type='refresh_token',refresh_token=self.token['refresh_token']))
   req=urllib.request.Request('https://api.spotify.com/v1/me/player'+path,method=method,headers={'Authorization':'Bearer '+self.token['access_token'],'Content-Type':'application/json'},data=json.dumps(body).encode() if body is not None else None)
@@ -210,6 +206,8 @@ class Window(QMainWindow):
     elif action=='start':self.start_vision()
     elif action=='stop':self.stop_vision()
     elif action=='dependencies':self.install_vision()
+    elif action=='client':self.client.setText(str(data.get('client','')));self.persist()
+    elif action=='quit':self.quit();return
     elif action=='images':
      self.stop_vision()
      try:
@@ -295,8 +293,8 @@ class Window(QMainWindow):
    return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.STDOUT,text=True,timeout=60).strip()
   def check():
    if git('status','--porcelain','--untracked-files=no'):raise RuntimeError('Local tracked changes must be committed before updating.')
-   git('fetch','origin','main')
-   return (git('rev-parse','HEAD'),git('rev-parse','origin/main'))
+   git('fetch','origin','windows')
+   return (git('rev-parse','HEAD'),git('rev-parse','origin/windows'))
   def ready(result):
    old,new=result
    if old==new:self.log.setText('Sakura is up to date.');return
@@ -353,6 +351,7 @@ class Window(QMainWindow):
   p=getattr(self,'dashboard_rgb',{})
   self.rgb_sync.update(p.get('mode')!='off' if p else self.rgb_enabled.isChecked(),locked and self.capture_requested,p.get('keyboard',self.rgb_keyboard.isChecked()),p.get('ram',self.rgb_ram.isChecked()),p.get('mouse',self.rgb_mouse.isChecked()),self.capture_requested,p)
  def refresh_hud(self,*args):
+  if os.name=='nt':return # external Wayland overlay is not supported on Windows yet
   visible=self.hud_enabled.isChecked() and self.capture_requested
   proc=getattr(self,'overlay_proc',None)
   if not visible:
