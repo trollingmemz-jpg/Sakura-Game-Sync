@@ -1,4 +1,4 @@
-import subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
+import tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secrets, threading, urllib.request, urllib.parse, urllib.error, http.server, webbrowser
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
@@ -76,6 +76,15 @@ class Window(QMainWindow):
   for label,fn in [('Add game',lambda:self.add(['New game','','',''])),('Remove selected',self.remove),('Save mappings',self.persist),('Play selected',self.manual),('Retry detection',self.retry)]:
    b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
   layout.addLayout(bar); settings=QGroupBox('Spotify connection');f=QFormLayout(settings);self.client=QLineEdit(self.sp.client);self.client.setPlaceholderText('Spotify developer application client ID');f.addRow('Client ID',self.client);self.device=QComboBox();self.device.setEditable(True);self.device.addItem(self.cfg.get('device',''));f.addRow('Playback device (blank = active)',self.device);b=QPushButton('Connect Spotify');b.clicked.connect(self.login);r=QPushButton('Refresh devices');r.clicked.connect(self.devices);f.addRow(b,r);layout.addWidget(settings)
+  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.capture_requested=False
+  group=QGroupBox('Adaptive combat — experimental');form=QFormLayout(group)
+  self.adaptive=QCheckBox('Enable mech soundtrack');self.adaptive.setChecked(self.cfg.get('adaptive',False));form.addRow(self.adaptive)
+  self.combat=QLineEdit(self.cfg.get('combat',''));form.addRow('Combat playlist URL',self.combat)
+  self.threshold=QSpinBox();self.threshold.setRange(8,100);self.threshold.setValue(self.cfg.get('threshold',12));form.addRow('Matching threshold',self.threshold)
+  self.vision_status=QLabel('Import mech references, then start capture');self.vision_status.setWordWrap(True);form.addRow(self.vision_status)
+  for label,fn in [('Install vision dependencies',self.install_vision),('Import blueprint archive',self.import_archive),('Import mech images',self.import_images),('Start capture',self.start_vision),('Stop capture',self.stop_vision)]:
+   b=QPushButton(label);b.clicked.connect(fn);form.addRow(b)
+  layout.addWidget(group)
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:9px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
   self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(3000)
@@ -102,6 +111,62 @@ class Window(QMainWindow):
     os.execv(sys.executable,[sys.executable,str(root/'app.py')])
    self.job(apply,restart)
   self.job(check,ready)
+ def install_vision(self):
+  self.job(lambda:subprocess.check_output([sys.executable,'-m','pip','install','opencv-python-headless'],stderr=subprocess.STDOUT,text=True,timeout=300),lambda _:self.vision_status.setText('Dependencies installed. Ready to import.'))
+ def reference_dir(self):
+  p=ROOT/'references';p.mkdir(exist_ok=True);return p
+ def stage(self,name,data):
+  if len(data)>20*1024*1024:return
+  suffix=Path(name).suffix.lower()
+  if suffix not in ('.png','.jpg','.jpeg','.webp'):return
+  (self.reference_dir()/(hashlib.sha256(data).hexdigest()+suffix)).write_bytes(data)
+ def import_archive(self):
+  if self.busy:return
+  path,_=QFileDialog.getOpenFileName(self,'Blueprint archive',str(Path.home()),'Archives (*.tar.gz *.tgz *.tar)')
+  if not path:return
+  def work():
+   total=used=0
+   with tarfile.open(path,'r:*') as t:
+    for m in t:
+     if not m.isfile() or Path(m.name).suffix.lower()!='.png':continue
+     total+=1
+     if not any('mech' in p.lower() for p in Path(m.name).parts[:-1]) or m.size>20*1024*1024:continue
+     f=t.extractfile(m)
+     if f:self.stage(m.name,f.read());used+=1
+   return total,used
+  def done(r):
+   self.vision_status.setText(f'Found {r[0]} blueprints; staged {r[1]} mech-folder candidates. Start capture to index.')
+  self.stop_vision();self.job(work,done)
+ def import_images(self):
+  if self.busy:return
+  files,_=QFileDialog.getOpenFileNames(self,'Select cropped mech references',str(Path.home()),'Images (*.png *.jpg *.jpeg *.webp)')
+  if not files:return
+  self.stop_vision()
+  try:
+   for p in files:self.stage(p,Path(p).read_bytes())
+   self.vision_status.setText('References saved. Start capture to index.')
+  except OSError as e:self.vision_status.setText(str(e))
+ def start_vision(self):
+  if self.busy or not self.persist():return
+  try:
+   uri(self.combat.text())
+   if 'Trailmakers' not in scan(self.rows):raise RuntimeError('Open Trailmakers first.')
+   import cv2
+   from adaptive import Vision
+   if self.vision is None:
+    self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
+   self.vision.load(list(self.reference_dir().glob('*')))
+   self.last_mech=0;self.last_frame=0;self.capture_requested=True;self.vision.start()
+  except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
+ def stop_vision(self):
+  self.capture_requested=False;self.last_mech=0;self.last_frame=0
+  if self.vision:self.vision.stop()
+ def on_mech(self,score):
+  if not self.capture_requested:return
+  self.last_frame=time.monotonic()
+  if score>=self.threshold.value():self.last_mech=self.last_frame
+  self.vision_status.setText(f'Matching features: {int(score)} | '+('MECH DETECTED' if score>=self.threshold.value() else 'Scanning'))
+  if score>=self.threshold.value() and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
  def add(self,row):
   i=self.table.rowCount();self.table.insertRow(i)
   for j,x in enumerate(row):self.table.setItem(i,j,QTableWidgetItem(x))
@@ -113,7 +178,7 @@ class Window(QMainWindow):
    if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
    for r in rows:uri(r[3])
   except ValueError as e:self.log.setText(str(e));return False
-  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
+  self.rows=rows;self.cfg=dict(client=self.client.text().strip(),device=self.device.currentText().strip(),enabled=self.enabled.isChecked(),shuffle=self.shuffle.isChecked(),fallback=self.fallback.isChecked());self.cfg.update(adaptive=self.adaptive.isChecked(),combat=self.combat.text().strip(),threshold=self.threshold.value());save('games.json',rows);save('settings.json',self.cfg);self.sp.client=self.cfg['client'];self.log.setText('Settings saved.');return True
  def job(self,fn,callback=None):
   if self.busy:return
   self.busy=True;self.callback=callback
@@ -144,7 +209,15 @@ class Window(QMainWindow):
  def tick(self):
   if self.busy:return
   found=scan(self.rows);target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop');self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
+  if 'Trailmakers' not in found and self.capture_requested:self.stop_vision()
   if not self.enabled.isChecked():self.active=None;return
+  now=time.monotonic()
+  if 'Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested and self.last_mech and now-self.last_mech<15 and now-self.last_frame<15:
+   if self.active!='Mech combat' and now>=self.combat_retry:
+    self.combat_retry=now+15
+    playlist=self.combat.text().strip();device=self.device.currentText().strip();shuffle=self.shuffle.isChecked()
+    self.job(lambda:self.sp.play(playlist,device,shuffle),lambda _:setattr(self,'active','Mech combat'))
+   return
   if target!=self.candidate:self.candidate=target;self.count=1;return
   self.count+=1
   if self.count<2 or target==self.active:return
@@ -155,6 +228,6 @@ class Window(QMainWindow):
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
   else:self.hide();e.ignore()
- def quit(self):self.quitting=True;QApplication.quit()
+ def quit(self):self.stop_vision();self.quitting=True;QApplication.quit()
 if __name__=='__main__':
  app=QApplication(sys.argv);app.setQuitOnLastWindowClosed(False);w=Window();w.show() if '--background' not in sys.argv else None;sys.exit(app.exec())
