@@ -161,6 +161,13 @@ class Window(QMainWindow):
   self.timer=QTimer(self);self.timer.timeout.connect(self.tick);self.timer.start(3000)
   self.dashboard_timer=QTimer(self);self.dashboard_timer.timeout.connect(self.dashboard_sync);self.dashboard_timer.start(1000)
   self.dashboard_sync()
+ def dashboard_player_state(self):
+  result=dict(player={},devices=[],player_error='',device_error='')
+  try:result['devices']=self.sp.call('/devices').get('devices',[])
+  except Exception as e:result['device_error']=str(e)
+  try:result['player']=self.sp.call('')
+  except Exception as e:result['player_error']=str(e)
+  return result
  def dashboard_sync(self):
   try:
    raw=load('dashboard-rgb.json',{})
@@ -239,23 +246,30 @@ class Window(QMainWindow):
     if time.time()-data.get('time',0)<30:
      action=data.get('action')
      def task():
-      if action=='transfer':self.sp.call('','PUT',{'device_ids':[str(data['device'])],'play':bool(data.get('play',True))})
-      elif action in ('play','pause'):self.sp.call('/'+action,'PUT')
-      elif action in ('next','previous'):self.sp.call('/'+action,'POST')
-      elif action=='volume':self.sp.call('/volume?volume_percent='+str(max(0,min(100,int(data['value'])))),'PUT')
-      elif action=='shuffle':self.sp.call('/shuffle?state='+str(bool(data['value'])).lower(),'PUT')
-      elif action=='repeat':self.sp.call('/repeat?state='+str(data['value']),'PUT')
-      elif action=='playlist':self.sp.call('/play','PUT',{'context_uri':uri(data['value'])})
-      return {'player':self.sp.call(''),'devices':self.sp.call('/devices').get('devices',[])}
+      try:
+       if action=='transfer':self.sp.call('','PUT',{'device_ids':[str(data['device'])],'play':bool(data.get('play',True))})
+       elif action in ('play','pause'):self.sp.call('/'+action,'PUT')
+       elif action in ('next','previous'):self.sp.call('/'+action,'POST')
+       elif action=='volume':self.sp.call('/volume?volume_percent='+str(max(0,min(100,int(data['value'])))),'PUT')
+       elif action=='shuffle':self.sp.call('/shuffle?state='+str(bool(data['value'])).lower(),'PUT')
+       elif action=='repeat':self.sp.call('/repeat?state='+str(data['value']),'PUT')
+       elif action=='playlist':self.sp.call('/play','PUT',{'context_uri':uri(data['value'])})
+       return self.dashboard_player_state()
+      except Exception as e:return dict(error=str(e))
      def receive(result):
+      if result.get('error'):
+       save('dashboard-player-result.json',dict(time=time.time(),action=action,error=result['error']))
+       self.log.setText(result['error']);return
       save('dashboard-player.json',dict(time=time.time(),**result))
+      save('dashboard-player-result.json',dict(time=time.time(),action=action,error=result.get('device_error','') if action=='refresh' else ''))
       if action=='transfer':
        device=next((d for d in result['devices'] if d.get('id')==data.get('device')),None)
        if device:self.device.setCurrentText(device['name']);self.persist()
+     self.last_dashboard_player=time.monotonic()
      self.job(task,receive)
    if not self.busy and self.sp.client and self.sp.token.get('refresh_token') and time.monotonic()-getattr(self,'last_dashboard_player',0)>12:
     self.last_dashboard_player=time.monotonic()
-    self.job(lambda:{'player':self.sp.call(''),'devices':self.sp.call('/devices').get('devices',[])},lambda result:save('dashboard-player.json',dict(time=time.time(),**result)))
+    self.job(self.dashboard_player_state,lambda result:save('dashboard-player.json',dict(time=time.time(),**result)))
    request=ROOT/'dashboard-show.request'
    if request.exists():
     fresh=time.time()-request.stat().st_mtime<15
