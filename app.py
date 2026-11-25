@@ -163,6 +163,19 @@ class Window(QMainWindow):
   self.dashboard_sync()
  def dashboard_sync(self):
   try:
+   raw=load('dashboard-rgb.json',{})
+   profile={}
+   if isinstance(raw,dict) and raw.get('mode') in ('auto','manual','off'):
+    profile['mode']=raw['mode']
+    profile['brightness']=max(0,min(100,int(raw.get('brightness',100))))
+    for key in ('idle','scanning','combat','manual'):
+     color=raw.get(key)
+     if isinstance(color,list) and len(color)==3 and all(type(x)==int and 0<=x<=255 for x in color):profile[key]=tuple(color)
+    for key in ('keyboard','ram','mouse'):
+     profile[key]=bool(raw.get(key,True))
+   self.dashboard_rgb=profile
+  except (ValueError,TypeError):pass
+  try:
    locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
    save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
    request=ROOT/'dashboard-show.request'
@@ -234,7 +247,8 @@ class Window(QMainWindow):
   except OSError as e:self.vision_status.setText(str(e))
  def refresh_rgb(self):
   locked=self.combat_latched and time.monotonic()-self.last_mech<20
-  self.rgb_sync.update(self.rgb_enabled.isChecked(),locked and self.capture_requested,self.rgb_keyboard.isChecked(),self.rgb_ram.isChecked(),self.rgb_mouse.isChecked(),self.capture_requested)
+  p=getattr(self,'dashboard_rgb',{})
+  self.rgb_sync.update(p.get('mode')!='off' if p else self.rgb_enabled.isChecked(),locked and self.capture_requested,p.get('keyboard',self.rgb_keyboard.isChecked()),p.get('ram',self.rgb_ram.isChecked()),p.get('mouse',self.rgb_mouse.isChecked()),self.capture_requested,p)
  def refresh_hud(self,*args):
   visible=self.hud_enabled.isChecked() and self.capture_requested
   proc=getattr(self,'overlay_proc',None)
