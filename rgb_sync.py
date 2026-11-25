@@ -6,11 +6,11 @@ class RGBSync(QObject):
  report=Signal(str)
  def __init__(self,parent=None):
   super().__init__(parent)
-  self.state=(False,False,True,True,True,False)
+  self.state=(False,False,True,True,True,False,{})
   self.stop=threading.Event()
   threading.Thread(target=self.run,daemon=True).start()
- def update(self,enabled,locked,keyboard,ram,mouse,scanning=True):
-  self.state=(enabled,locked,keyboard,ram,mouse,scanning)
+ def update(self,enabled,locked,keyboard,ram,mouse,scanning=True,profile=None):
+  self.state=(enabled,locked,keyboard,ram,mouse,scanning,profile or {})
  def run(self):
   client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(244.,120.,215.)
   def report(msg):
@@ -23,7 +23,7 @@ class RGBSync(QObject):
     except Exception:pass
    client=None;devices=[];last_sdk=None
   while not self.stop.wait(.10):
-   enabled,locked,keyboard,ram,mouse,scanning=self.state
+   enabled,locked,keyboard,ram,mouse,scanning,profile=self.state
    now=time.monotonic()
    if not enabled:
     if previous is not None:
@@ -32,13 +32,14 @@ class RGBSync(QObject):
    selection=(keyboard,ram,mouse)
    if selection!=previous:
     disconnect();last_mouse=None;retry=0.;mouse_retry=0.;previous=selection
+   locked=locked and profile.get('mode','auto')=='auto'
    mix+=((1. if locked else 0.)-mix)*.35
    if abs(mix-(1. if locked else 0.))<.01:mix=1. if locked else 0.
    pulse=(1+math.sin(now*math.tau/2.4))/2
    strength=.40+.60*pulse
-   target_base=(179,108,255) if scanning else (244,120,215)
+   target_base=profile.get('manual',(244,120,215)) if profile.get('mode')=='manual' else profile.get('scanning',(179,108,255)) if scanning else profile.get('idle',(244,120,215))
    base=tuple(a+(b-a)*.35 if abs(b-a)>=.5 else float(b) for a,b in zip(base,target_base))
-   rgb=tuple(round(a*(1-mix)+b*mix*strength) for a,b in zip(base,(240,24,134)))
+   rgb=tuple(round((a*(1-mix)+b*mix*strength)*profile.get('brightness',100)/100) for a,b in zip(base,profile.get('combat',(240,24,134))))
    errors=[]
    if (keyboard or ram) and client is None and now>=retry:
     retry=now+8
