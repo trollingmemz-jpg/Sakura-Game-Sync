@@ -2,7 +2,7 @@ import math, tarfile, subprocess, os, sys, json, time, re, base64, hashlib, secr
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import *
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QGuiApplication
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QGuiApplication, QLinearGradient
 ROOT=Path.home()/'.config/sakura-game-sync'; ROOT.mkdir(parents=True,exist_ok=True)
 DEFAULT=[['Trailmakers','585420','trailmakers.exe','0WJzQWmJyamJTDxct2Tzw8'],['ULTRAKILL','1229490','ultrakill.exe','1bGOkRB37GOYMpr7DGDXxM'],['Minecraft','','net.minecraft.client.main.main|net.fabricmc.loader.impl.launch.knot.knotclient|org.quiltmc.loader.impl.launch.knot.knotclient|net.minecraft.launchwrapper.launch|forgeclient','3zI3N0QdvDVWLQQdsPhUdI'],['Rocket League','252950','rocketleague.exe','6cY3qz1WExXcwKOPfjceO7'],['Desktop','','','6HDaqxkKSPxjhditVm7vx7']]
 def load(name, default):
@@ -74,6 +74,35 @@ class Spotify:
   except RuntimeError:pass
 class Bridge(QObject):
  done=Signal(object,object)
+class CombatHue(QWidget):
+ def __init__(self):
+  super().__init__(None,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.WindowTransparentForInput|Qt.WindowType.WindowDoesNotAcceptFocus)
+  self.setWindowTitle('Sakura Combat Hue')
+  self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+  self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+  self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+  self.mix=0.;self.pulse=0.;self.target_screen=None
+ def paintEvent(self,event):
+  p=QPainter(self)
+  w,h=self.width(),self.height()
+  depth=max(1,int(min(w,h)*.16))
+  color=QColor(int(45+210*self.mix),int(220-175*self.mix),int(200-155*self.mix))
+  alpha=int(65+self.mix*(35+55*self.pulse))
+  for x1,y1,x2,y2,x,y,rw,rh in [(0,0,depth,0,0,0,depth,h),(w,0,w-depth,0,w-depth,0,depth,h),(0,0,0,depth,0,0,w,depth),(0,h,0,h-depth,0,h-depth,w,depth)]:
+   g=QLinearGradient(x1,y1,x2,y2)
+   c=QColor(color);c.setAlpha(alpha);g.setColorAt(0,c)
+   c=QColor(color);c.setAlpha(int(alpha*.25));g.setColorAt(.45,c)
+   c=QColor(color);c.setAlpha(0);g.setColorAt(1,c)
+   p.fillRect(x,y,rw,rh,g)
+  p.end()
+ def display_on(self,screen):
+  if self.target_screen!=screen or not self.isVisible():
+   self.target_screen=screen
+   self.winId()
+   self.windowHandle().setScreen(screen)
+   self.setGeometry(screen.geometry())
+   self.showFullScreen()
+   self.raise_()
 class Window(QMainWindow):
  def __init__(self):
   super().__init__();self.setWindowTitle('Sakura • Game Sync');self.resize(980,660);self.cfg=load('settings.json',{});self.rows=load('games.json',DEFAULT);self.sp=Spotify();self.sp.client=self.cfg.get('client','');self.busy=False;self.active=None;self.candidate=None;self.count=0;self.bridge=Bridge();self.bridge.done.connect(self.complete);self.callback=None;self.quitting=False
@@ -102,9 +131,9 @@ class Window(QMainWindow):
   form.addRow('Trailmakers monitor',self.hud_screen)
   self.hud=QLabel(None,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.WindowTransparentForInput|Qt.WindowType.WindowDoesNotAcceptFocus)
   self.hud.setWindowTitle('Sakura Combat Overlay');self.hud.setObjectName('SakuraCombatOverlay');self.hud.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating);self.hud.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-  self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
+  self.hue=CombatHue();self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
   self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
-  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(80)
+  self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(40)
   layout.addWidget(group)
   self.log=QLabel('');self.log.setWordWrap(True);layout.addWidget(self.log);update=QPushButton('Check for updates');update.clicked.connect(self.update_app);layout.addWidget(update);self.setStyleSheet('QWidget{background:#161820;color:#e9e7ef;font-size:13px} QLabel#heading{font-size:25px;font-weight:700;color:#f1a6c4} QTableWidget,QLineEdit,QComboBox{background:#222531;border:1px solid #373949;border-radius:5px;padding:5px} QPushButton{background:#343143;border:1px solid #514459;border-radius:6px;padding:9px} QPushButton:hover{background:#55405a} QHeaderView::section{background:#2b2c38;padding:7px;border:0} QGroupBox{border:1px solid #373949;border-radius:8px;margin-top:10px;padding:12px} QGroupBox::title{subcontrol-origin:margin;left:10px;color:#f1a6c4}')
   pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);p.setBrush(QColor('#ee9cbe'));p.setPen(Qt.PenStyle.NoPen);p.drawEllipse(5,5,38,38);p.end();self.tray=QSystemTrayIcon(QIcon(pix),self);menu=QMenu();menu.addAction('Show Sakura',self.showNormal);menu.addAction('Check for updates',self.update_app);menu.addAction('Quit',self.quit);self.tray.setContextMenu(menu);self.tray.activated.connect(lambda reason:self.showNormal() if reason==QSystemTrayIcon.ActivationReason.Trigger else None);self.tray.show()
@@ -130,6 +159,7 @@ class Window(QMainWindow):
    def restart(_):
     self.quitting=True
     if self.vision:self.vision.stop()
+    self.hue.hide();self.hud.hide()
     lock.unlock()
     os.execv(sys.executable,[sys.executable,str(root/'app.py')])
    self.job(apply,restart)
@@ -171,7 +201,7 @@ class Window(QMainWindow):
   except OSError as e:self.vision_status.setText(str(e))
  def refresh_hud(self,*args):
   if not self.hud_enabled.isChecked() or not self.capture_requested:
-   self.hud.hide();return
+   self.hud.hide();self.hue.hide();return
   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
   if screen is None:self.hud.hide();return
   locked=self.combat_latched or self.active=='Mech combat'
@@ -179,6 +209,8 @@ class Window(QMainWindow):
   n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
   state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('CONFIRMING MECH' if n else 'SCANNING'))
   pulse=(1+math.sin(time.monotonic()*math.tau/2.4))/2
+  self.hue.mix+=((1. if locked else 0.)-self.hue.mix)*.14
+  self.hue.pulse=pulse;self.hue.display_on(screen);self.hue.update()
   color=f'#ff{int(65+55*pulse):02x}{int(65+55*pulse):02x}' if locked else '#55d6c6'
   bg=f'rgba({int(48+40*pulse)},18,24,215)' if locked else 'rgba(15,42,43,205)'
   self.hud.setStyleSheet('QLabel{background:'+bg+';border:2px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
@@ -204,7 +236,7 @@ class Window(QMainWindow):
  def stop_vision(self):
   self.evidence=[];self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
-  self.hud.hide()
+  self.hud.hide();self.hue.hide()
  def on_mech(self,score):
   if not self.capture_requested:return
   now=time.monotonic()
