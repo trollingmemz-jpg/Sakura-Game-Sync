@@ -183,6 +183,16 @@ class Window(QMainWindow):
     fresh=time.time()-request.stat().st_mtime<15
     request.unlink()
     if fresh:self.showNormal();self.raise_();self.activateWindow()
+   request=ROOT/'dashboard-restart.request'
+   if request.exists() and not self.busy:
+    fresh=time.time()-request.stat().st_mtime<120
+    request.unlink()
+    if fresh:
+     self.stop_vision();self.rgb_sync.stop.set();self.quitting=True
+     args=[sys.executable,str(Path(__file__).resolve())]
+     if not self.isVisible():args.append('--background')
+     lock.unlock()
+     os.execv(sys.executable,args)
   except OSError:pass
  def update_app(self):
   if self.busy:return
