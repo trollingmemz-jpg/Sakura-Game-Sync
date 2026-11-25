@@ -62,7 +62,7 @@ class Spotify:
     if not b.strip() or r.status==204:return {}
     try:return json.loads(b)
     except ValueError as e:raise RuntimeError(f'Spotify returned non-JSON HTTP {r.status} for {method} {path or "/"}: '+b.decode(errors='replace')[:160]) from e
-  except urllib.error.HTTPError as e:raise RuntimeError(f'Spotify HTTP {e.code}: '+e.read().decode(errors='replace')[:250]) from e
+  except urllib.error.HTTPError as e:raise RuntimeError(f'Spotify HTTP {e.code} for {method} {path.split(chr(63),1)[0] or "/"}: '+e.read().decode(errors='replace')[:250]) from e
  def play(self,playlist,device,shuffle):
   devices=self.call('/devices').get('devices',[]); d=next((d for d in devices if d['name']==device),None) if device else next((d for d in devices if d.get('is_active')),None)
   if not d:raise RuntimeError('Open Spotify on the desired device, then refresh devices.')
@@ -342,10 +342,10 @@ class Window(QMainWindow):
   try:uri(playlist)
   except ValueError as e:self.log.setText(str(e));self.retry_after=now+30;return
   device=self.device.currentText().strip();shuffle=self.shuffle.isChecked()
-  self.retry_after=now+10
+  self.retry_after=now+30
   def done(_):
    self.active=target;self.last_switch=time.monotonic();self.retry_after=0
-  if target=='Mech combat':self.combat_sent=True
+   if target=='Mech combat' and self.combat_latched:self.combat_sent=True
   self.job(lambda:self.sp.play(playlist,device,shuffle),done)
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
