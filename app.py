@@ -86,7 +86,7 @@ class Window(QMainWindow):
   for label,fn in [('Add game',lambda:self.add(['New game','','',''])),('Remove selected',self.remove),('Save mappings',self.persist),('Play selected',self.manual),('Retry detection',self.retry)]:
    b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
   layout.addLayout(bar); settings=QGroupBox('Spotify connection');f=QFormLayout(settings);self.client=QLineEdit(self.sp.client);self.client.setPlaceholderText('Spotify developer application client ID');f.addRow('Client ID',self.client);self.device=QComboBox();self.device.setEditable(True);self.device.addItem(self.cfg.get('device',''));f.addRow('Playback device (blank = active)',self.device);b=QPushButton('Connect Spotify');b.clicked.connect(self.login);r=QPushButton('Refresh devices');r.clicked.connect(self.devices);f.addRow(b,r);layout.addWidget(settings)
-  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False;self.combat_latched=False;self.combat_sent=False;self.clear_since=None;self.hit_since=None
+  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False;self.combat_latched=False;self.combat_sent=False;self.clear_since=None;self.hit_since=None;self.evidence=[]
   group=QGroupBox('Adaptive combat — experimental');form=QFormLayout(group)
   self.adaptive=QCheckBox('Enable mech soundtrack');self.adaptive.setChecked(self.cfg.get('adaptive',False));form.addRow(self.adaptive)
   self.combat=QLineEdit(self.cfg.get('combat',''));form.addRow('Combat playlist URL',self.combat)
@@ -168,33 +168,30 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
-   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.capture_requested=True;self.vision.start()
+   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
-  self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
+  self.evidence=[];self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
  def on_mech(self,score):
   if not self.capture_requested:return
   now=time.monotonic()
-  gap=now-self.last_frame if self.last_frame else 0
   self.last_frame=now
-  if gap>5:self.hits=0;self.clear_since=None;self.hit_since=None
   threshold=self.threshold.value()
-  if not self.combat_latched:
-   if score>=threshold:
-    if self.hits==0:self.hit_since=now
-    self.hits+=1
-    if self.hits>=3 and now-self.hit_since>=1.5:
-     self.combat_latched=True;self.clear_since=None;self.last_mech=now
-   else:self.hits=0;self.hit_since=None
-  elif score>=max(5,int(threshold*.7)):
-   self.last_mech=now;self.clear_since=None
-  else:
-   if self.clear_since is None:self.clear_since=now
-   if now-self.clear_since>=45:
-    self.combat_latched=False;self.combat_sent=False;self.hits=0;self.hit_since=None;self.clear_since=None
-  status='COMBAT LOCKED' if self.combat_latched else ('Confirming mech' if self.hits else 'Scanning')
-  self.vision_status.setText(f'Matching features: {int(score)} | {status}')
+  self.evidence=[t for t in self.evidence if now-t<=8]
+  if score>=threshold:
+   self.evidence.append(now)
+  if not self.combat_latched and len(self.evidence)>=3:
+   self.combat_latched=True;self.clear_since=None;self.last_mech=now
+  if self.combat_latched:
+   if score>=max(5,int(threshold*.7)):
+    self.last_mech=now;self.clear_since=None
+   else:
+    if self.clear_since is None:self.clear_since=now
+    if now-self.clear_since>=45:
+     self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
+  status='COMBAT LOCKED' if self.combat_latched else ('Confirming mech' if self.evidence else 'Scanning')
+  self.vision_status.setText(f'Matching features: {int(score)} | {status} | Evidence: {min(3,len(self.evidence))}/3')
   if self.combat_latched and not self.combat_sent and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
  def add(self,row):
   i=self.table.rowCount();self.table.insertRow(i)
