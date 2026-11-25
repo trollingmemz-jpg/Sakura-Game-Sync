@@ -1,13 +1,15 @@
 """Experimental local mech matching using user-selected blueprint references."""
-import time, threading
+import time, threading, os, subprocess, shutil, sys
 from pathlib import Path
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtMultimedia import QWindowCapture,QMediaCaptureSession,QVideoSink
+from PySide6.QtCore import QObject, Signal, Qt
+from PySide6.QtGui import QImage
 class Vision(QObject):
  report=Signal(str)
  detected=Signal(float)
  def __init__(self,parent=None):
-  super().__init__(parent);self.capture=QWindowCapture(self);self.session=QMediaCaptureSession(self);self.sink=QVideoSink(self);self.session.setWindowCapture(self.capture);self.session.setVideoSink(self.sink);self.sink.videoFrameChanged.connect(self.frame);self.capture.errorOccurred.connect(lambda *a:self.report.emit(str(a[-1])));self.refs=[];self.busy=False;self.last=0;self.generation=0
+  super().__init__(parent);self.refs=[];self.busy=False;self.last=0;self.generation=0;self.proc=None
+  self.portal_frame.connect(self.frame,Qt.ConnectionType.QueuedConnection)
+ portal_frame=Signal(object)
  def load(self,files):
   import cv2,numpy as np
   orb=cv2.ORB_create(nfeatures=1000);refs=[]
@@ -23,16 +25,34 @@ class Vision(QObject):
   self.refs=refs;self.report.emit(f'{len(refs)} reference feature sets indexed')
  def start(self):
   if not self.refs:raise RuntimeError('Import mech references first.')
-  windows=[w for w in QWindowCapture.capturableWindows() if w.isValid() and w.description().strip().lower()=='trailmakers']
-  if not windows:raise RuntimeError('Trailmakers window capture unavailable on this Qt/Wayland backend. Desktop capture disabled for safety.')
-  self.capture.setWindow(windows[0])
-  self.generation+=1;self.capture.setActive(True)
+  self.stop()
+  helper=Path(__file__).with_name('portal_capture.py')
+  self.proc=subprocess.Popen(['/usr/bin/python3',str(helper)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
+  proc=self.proc;gen=self.generation
+  def read_exact(n):
+   data=bytearray()
+   while len(data)<n:
+    chunk=proc.stdout.read(n-len(data))
+    if not chunk:return None
+    data.extend(chunk)
+   return bytes(data)
+  def reader():
+   try:
+    while gen==self.generation:
+     data=read_exact(960*540*3)
+     if data is None:break
+     self.portal_frame.emit((gen,data))
+   finally:
+    if gen==self.generation:self.report.emit('Window capture ended: '+proc.stderr.read().decode(errors='replace')[-800:])
+  threading.Thread(target=reader,daemon=True).start()
  def stop(self):
-  self.generation+=1;self.capture.setActive(False)
- def frame(self,f):
-  if not self.capture.isActive() or self.busy or time.monotonic()-self.last<0.5:return
-  from PySide6.QtGui import QImage
-  im=f.toImage()
+  self.generation+=1
+  if self.proc:
+   self.proc.terminate();self.proc=None
+ def frame(self,payload):
+  gen,data=payload
+  if gen!=self.generation or self.busy or time.monotonic()-self.last<0.5:return
+  im=QImage(data,960,540,2880,QImage.Format.Format_RGB888).copy()
   if im.isNull():return
   if im.width()>960:im=im.scaledToWidth(960)
   im=im.convertToFormat(QImage.Format.Format_RGB888);data=bytes(im.constBits());w,h,stride=im.width(),im.height(),im.bytesPerLine();refs=self.refs;gen=self.generation;self.last=time.monotonic();self.busy=True
