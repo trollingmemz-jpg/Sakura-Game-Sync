@@ -1,29 +1,40 @@
 import os,sys,json,math,time
+os.environ['GDK_BACKEND']='x11'
 import gi
 gi.require_version('Gtk','3.0')
-gi.require_version('GtkLayerShell','0.1')
-from gi.repository import Gtk,Gdk,GLib,GtkLayerShell as Layer
+gi.require_version('GdkX11','3.0')
+from gi.repository import Gtk,Gdk,GdkX11,GLib
+from Xlib import X,display,error
 import cairo
-if not Layer.is_supported():raise RuntimeError('Compositor does not support layer shell')
 path=sys.argv[1]
 parent=os.getppid()
-win=Gtk.Window()
-win.set_decorated(False);win.set_app_paintable(True);win.set_accept_focus(False)
+connection=display.Display()
+root=connection.screen().root
+active_atom=connection.intern_atom('_NET_ACTIVE_WINDOW')
+clients_atom=connection.intern_atom('_NET_CLIENT_LIST')
+win=Gtk.Window(type=Gtk.WindowType.POPUP)
+win.set_title('Sakura Combat Hue')
+win.set_accept_focus(False);win.set_focus_on_map(False);win.set_app_paintable(True)
 visual=win.get_screen().get_rgba_visual()
-if visual:win.set_visual(visual)
-Layer.init_for_window(win)
-Layer.set_layer(win,Layer.Layer.OVERLAY)
-Layer.set_exclusive_zone(win,-1)
-Layer.set_keyboard_mode(win,Layer.KeyboardMode.NONE)
-for edge in (Layer.Edge.TOP,Layer.Edge.BOTTOM,Layer.Edge.LEFT,Layer.Edge.RIGHT):Layer.set_anchor(win,edge,True)
-def empty(*args):
- win.input_shape_combine_region(cairo.Region())
-win.connect('realize',empty)
-state={};mix=0.;monitor=None
+if visual is None:raise RuntimeError('No transparent XWayland visual')
+win.set_visual(visual)
+state={};mix=0.;bounds=None;target=None
+def find_game():
+ clients=root.get_full_property(clients_atom,X.AnyPropertyType)
+ candidates=[]
+ for wid in clients.value if clients else ():
+  try:
+   w=connection.create_resource_object('window',int(wid))
+   if 'steam_app_585420' not in (w.get_wm_class() or ()) or w.get_attributes().map_state!=X.IsViewable:continue
+   g=w.get_geometry()
+   if g.width>=640 and g.height>=360:candidates.append((g.width*g.height,w))
+  except error.XError:continue
+ return max(candidates,key=lambda x:x[0])[1] if candidates else None
 def draw(widget,cr):
  global mix
  w,h=widget.get_allocated_width(),widget.get_allocated_height()
  cr.set_operator(cairo.OPERATOR_SOURCE);cr.set_source_rgba(0,0,0,0);cr.paint();cr.set_operator(cairo.OPERATOR_OVER)
+ if not state.get('focused'):return True
  mix+=((1. if state.get('locked') else 0.)-mix)*.14
  pulse=(1+math.sin(time.monotonic()*math.tau/2.4))/2
  r,g,b=(45+210*mix)/255,(220-175*mix)/255,(200-155*mix)/255
@@ -42,18 +53,23 @@ def draw(widget,cr):
  return True
 win.connect('draw',draw)
 def tick():
- global state,monitor
+ global state,bounds,target
  if os.getppid()!=parent:Gtk.main_quit();return False
  try:
   with open(path) as f:state=json.load(f)
   if time.time()-state['time']>3 or not state['visible']:win.hide();return True
-  coords=state['geometry']
-  display=Gdk.Display.get_default()
-  target=display.get_monitor_at_point(coords[0]+coords[2]//2,coords[1]+coords[3]//2)
-  if target!=monitor:
-   win.hide();Layer.set_monitor(win,target);monitor=target
-  if not win.get_visible():win.show_all();empty()
+  if target is None:target=find_game()
+  if target is None:win.hide();return True
+  active=root.get_full_property(active_atom,X.AnyPropertyType)
+  state['focused']=bool(active and len(active.value) and int(active.value[0])==target.id and target.get_attributes().map_state==X.IsViewable)
+  g=target.get_geometry();p=root.translate_coords(target,0,0);scale=win.get_scale_factor()
+  new=tuple(round(v/scale) for v in (p.x,p.y,g.width,g.height))
+  if new!=bounds:
+   win.move(*new[:2]);win.resize(*new[2:]);bounds=new
+  if not win.get_visible():
+   win.realize();native=win.get_window();native.input_shape_combine_region(cairo.Region(),0,0);native.set_pass_through(True);win.show()
   win.queue_draw()
+ except error.XError:target=None;bounds=None;win.hide()
  except (OSError,ValueError,KeyError):win.hide()
  return True
 GLib.timeout_add(40,tick)
