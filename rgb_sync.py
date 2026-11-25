@@ -12,7 +12,7 @@ class RGBSync(QObject):
  def update(self,enabled,locked,keyboard,ram,mouse,scanning=True):
   self.state=(enabled,locked,keyboard,ram,mouse,scanning)
  def run(self):
-  client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(238.,156.,190.)
+  client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(225.,40.,105.)
   def report(msg):
    nonlocal last_status
    if msg!=last_status:self.report.emit(msg);last_status=msg
@@ -36,9 +36,9 @@ class RGBSync(QObject):
    if abs(mix-(1. if locked else 0.))<.01:mix=1. if locked else 0.
    pulse=(1+math.sin(now*math.tau/2.4))/2
    strength=.40+.60*pulse
-   target_base=(55,214,198) if scanning else (238,156,190)
+   target_base=(0,180,155) if scanning else (225,40,105)
    base=tuple(a+(b-a)*.35 if abs(b-a)>=.5 else float(b) for a,b in zip(base,target_base))
-   rgb=tuple(round(a*(1-mix)+b*mix*strength) for a,b in zip(base,(255,20,20)))
+   rgb=tuple(round(a*(1-mix)+b*mix*strength) for a,b in zip(base,(255,0,0)))
    errors=[]
    if (keyboard or ram) and client is None and now>=retry:
     retry=now+8
