@@ -41,13 +41,13 @@ class RGBSync(QObject):
    base=tuple(a+(b-a)*.35 if abs(b-a)>=.5 else float(b) for a,b in zip(base,target_base))
    rgb=tuple(round((a*(1-mix)+b*mix*strength)*profile.get('brightness',100)/100) for a,b in zip(base,profile.get('combat',(240,24,134))))
    errors=[]
-   if (keyboard or ram) and client is None and now>=retry:
+   if (keyboard or ram or mouse) and client is None and now>=retry:
     retry=now+8
     try:
      from openrgb import OpenRGBClient
      client=OpenRGBClient('127.0.0.1',6743)
      for d in client.devices:
-      if (keyboard and int(d.type)==5) or (ram and int(d.type)==1):
+      if (keyboard and int(d.type)==5) or (ram and int(d.type)==1) or (mouse and int(d.type)==6):
        devices.append(d) # OpenLinkHub exposes only Direct mode; already selected
     except Exception as e:
      disconnect();errors.append('SDK: '+str(e))
@@ -58,7 +58,7 @@ class RGBSync(QObject):
      last_sdk=rgb
     except Exception as e:
      disconnect();retry=now+8;errors.append('SDK: '+str(e))
-   if mouse and rgb!=last_mouse and now>=mouse_retry:
+   if False: # Linux ckb FIFO not available on Windows
     try:
      if mouse_path is None or not mouse_path.exists():
       mouse_path=None
@@ -72,6 +72,6 @@ class RGBSync(QObject):
      last_mouse=rgb
     except Exception as e:mouse_retry=now+3;errors.append('Mouse: '+str(e))
    if errors:report(' | '.join(errors))
-   elif (keyboard or ram) and client is None:report('Waiting for OpenLinkHub SDK / Python dependency')
-   else:report(f'SDK: {len(devices)} selected devices | Mouse: '+('active' if mouse and last_mouse is not None else 'waiting' if mouse else 'off'))
+   elif (keyboard or ram) and client is None:report('Waiting for OpenRGB SDK')
+   else:report(f'OpenRGB: {len(devices)} selected devices')
   disconnect()
