@@ -61,7 +61,12 @@ class Spotify:
  def play(self,playlist,device,shuffle):
   devices=self.call('/devices').get('devices',[]); d=next((d for d in devices if d['name']==device),None) if device else next((d for d in devices if d.get('is_active')),None)
   if not d:raise RuntimeError('Open Spotify on the desired device, then refresh devices.')
-  q=urllib.parse.urlencode({'device_id':d['id']}); self.call('/play?'+q,'PUT',{'context_uri':uri(playlist)}); self.call('/shuffle?'+q+'&state='+str(shuffle).lower(),'PUT')
+  q=urllib.parse.urlencode({'device_id':d['id']}); desired=uri(playlist)
+  current=self.call('')
+  if (current.get('context') or {}).get('uri')==desired and (current.get('device') or {}).get('id')==d['id'] and current.get('is_playing'):return
+  self.call('/play?'+q,'PUT',{'context_uri':desired})
+  try:self.call('/shuffle?'+q+'&state='+str(shuffle).lower(),'PUT')
+  except RuntimeError:pass
 class Bridge(QObject):
  done=Signal(object,object)
 class Window(QMainWindow):
@@ -76,7 +81,7 @@ class Window(QMainWindow):
   for label,fn in [('Add game',lambda:self.add(['New game','','',''])),('Remove selected',self.remove),('Save mappings',self.persist),('Play selected',self.manual),('Retry detection',self.retry)]:
    b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
   layout.addLayout(bar); settings=QGroupBox('Spotify connection');f=QFormLayout(settings);self.client=QLineEdit(self.sp.client);self.client.setPlaceholderText('Spotify developer application client ID');f.addRow('Client ID',self.client);self.device=QComboBox();self.device.setEditable(True);self.device.addItem(self.cfg.get('device',''));f.addRow('Playback device (blank = active)',self.device);b=QPushButton('Connect Spotify');b.clicked.connect(self.login);r=QPushButton('Refresh devices');r.clicked.connect(self.devices);f.addRow(b,r);layout.addWidget(settings)
-  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.capture_requested=False
+  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False
   group=QGroupBox('Adaptive combat — experimental');form=QFormLayout(group)
   self.adaptive=QCheckBox('Enable mech soundtrack');self.adaptive.setChecked(self.cfg.get('adaptive',False));form.addRow(self.adaptive)
   self.combat=QLineEdit(self.cfg.get('combat',''));form.addRow('Combat playlist URL',self.combat)
@@ -159,14 +164,15 @@ class Window(QMainWindow):
    self.last_mech=0;self.last_frame=0;self.capture_requested=True;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
-  self.capture_requested=False;self.last_mech=0;self.last_frame=0
+  self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0
   if self.vision:self.vision.stop()
  def on_mech(self,score):
   if not self.capture_requested:return
   self.last_frame=time.monotonic()
-  if score>=self.threshold.value():self.last_mech=self.last_frame
+  self.hits=self.hits+1 if score>=self.threshold.value() else 0
+  if self.hits>=2:self.last_mech=self.last_frame
   self.vision_status.setText(f'Matching features: {int(score)} | '+('MECH DETECTED' if score>=self.threshold.value() else 'Scanning'))
-  if score>=self.threshold.value() and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
+  if self.hits>=2 and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
  def add(self,row):
   i=self.table.rowCount();self.table.insertRow(i)
   for j,x in enumerate(row):self.table.setItem(i,j,QTableWidgetItem(x))
@@ -208,23 +214,30 @@ class Window(QMainWindow):
  def retry(self):self.active=None;self.count=0;self.tick()
  def tick(self):
   if self.busy:return
-  found=scan(self.rows);target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop');self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
+  found=scan(self.rows);now=time.monotonic()
+  target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop')
+  self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
   if 'Trailmakers' not in found and self.capture_requested:self.stop_vision()
-  if not self.enabled.isChecked():self.active=None;return
-  now=time.monotonic()
-  if 'Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested and self.last_mech and now-self.last_mech<15 and now-self.last_frame<15:
-   if self.active!='Mech combat' and now>=self.combat_retry:
-    self.combat_retry=now+15
-    playlist=self.combat.text().strip();device=self.device.currentText().strip();shuffle=self.shuffle.isChecked()
-    self.job(lambda:self.sp.play(playlist,device,shuffle),lambda _:setattr(self,'active','Mech combat'))
-   return
-  if target!=self.candidate:self.candidate=target;self.count=1;return
-  self.count+=1
-  if self.count<2 or target==self.active:return
-  previous=self.active;self.active=target
-  if target=='Desktop' and (previous is None or not self.fallback.isChecked()):return
+  if not self.enabled.isChecked():self.active=None;self.candidate=None;self.count=0;return
+  combat='Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested
+  if combat and self.last_mech and now-self.last_mech<30:target='Mech combat'
+  if target==self.active:self.candidate=None;self.count=0;return
+  if target!=self.candidate:self.candidate=target;self.count=1
+  else:self.count+=1
+  if target!='Mech combat' and self.count<2:return
+  if now<self.retry_after:return
+  if self.active=='Mech combat' and target=='Trailmakers' and now-self.last_switch<30:return
+  if target=='Desktop' and (self.active is None or not self.fallback.isChecked()):self.active=target;return
   row=next((r for r in self.rows if r[0]==target),None)
-  if row:self.play(row)
+  playlist=self.combat.text().strip() if target=='Mech combat' else (row[3] if row else '')
+  if not playlist:return
+  try:uri(playlist)
+  except ValueError as e:self.log.setText(str(e));self.retry_after=now+30;return
+  device=self.device.currentText().strip();shuffle=self.shuffle.isChecked()
+  self.retry_after=now+10
+  def done(_):
+   self.active=target;self.last_switch=time.monotonic();self.retry_after=0
+  self.job(lambda:self.sp.play(playlist,device,shuffle),done)
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
   else:self.hide();e.ignore()
