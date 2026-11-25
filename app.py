@@ -178,6 +178,40 @@ class Window(QMainWindow):
   try:
    locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
    save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
+   request=ROOT/'dashboard-game.request'
+   if request.exists() and not self.busy:
+    data=load(request.name,{})
+    request.unlink()
+    for key in ('enabled','shuffle','fallback','adaptive','hud_enabled'):
+     if key in data:getattr(self,key).setChecked(bool(data[key]))
+    if 'combat' in data:self.combat.setText(str(data['combat']))
+    if 'device' in data:self.device.setCurrentText(str(data['device']))
+    if 'threshold' in data:self.threshold.setValue(int(data['threshold']))
+    self.persist()
+   request=ROOT/'dashboard-player.request'
+   if request.exists() and not self.busy:
+    data=load(request.name,{})
+    request.unlink()
+    if time.time()-data.get('time',0)<30:
+     action=data.get('action')
+     def task():
+      if action=='transfer':self.sp.call('','PUT',{'device_ids':[str(data['device'])],'play':bool(data.get('play',True))})
+      elif action in ('play','pause'):self.sp.call('/'+action,'PUT')
+      elif action in ('next','previous'):self.sp.call('/'+action,'POST')
+      elif action=='volume':self.sp.call('/volume?volume_percent='+str(max(0,min(100,int(data['value'])))),'PUT')
+      elif action=='shuffle':self.sp.call('/shuffle?state='+str(bool(data['value'])).lower(),'PUT')
+      elif action=='repeat':self.sp.call('/repeat?state='+str(data['value']),'PUT')
+      elif action=='playlist':self.sp.call('/play','PUT',{'context_uri':uri(data['value'])})
+      return {'player':self.sp.call(''),'devices':self.sp.call('/devices').get('devices',[])}
+     def receive(result):
+      save('dashboard-player.json',dict(time=time.time(),**result))
+      if action=='transfer':
+       device=next((d for d in result['devices'] if d.get('id')==data.get('device')),None)
+       if device:self.device.setCurrentText(device['name']);self.persist()
+     self.job(task,receive)
+   if not self.busy and self.sp.client and self.sp.token.get('refresh_token') and time.monotonic()-getattr(self,'last_dashboard_player',0)>12:
+    self.last_dashboard_player=time.monotonic()
+    self.job(lambda:{'player':self.sp.call(''),'devices':self.sp.call('/devices').get('devices',[])},lambda result:save('dashboard-player.json',dict(time=time.time(),**result)))
    request=ROOT/'dashboard-show.request'
    if request.exists():
     fresh=time.time()-request.stat().st_mtime<15
