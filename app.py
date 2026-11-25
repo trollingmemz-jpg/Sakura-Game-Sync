@@ -178,6 +178,50 @@ class Window(QMainWindow):
   try:
    locked=self.capture_requested and self.combat_latched and time.monotonic()-self.last_mech<20
    save('dashboard-status.json',dict(time=time.time(),pid=os.getpid(),game=self.status.text(),playlist=self.active or 'Waiting',scanning=self.capture_requested,combat=locked,scanner=self.vision_status.text(),rgb=self.rgb_status.text(),spotify=self.log.text()))
+   request=ROOT/'dashboard-advanced.request'
+   if request.exists() and not self.busy:
+    data=load(request.name,{})
+    request.unlink()
+    action=data.get('action')
+    if action=='login':
+     self.client.setText(str(data.get('client','')).strip())
+     self.login()
+    elif action=='mappings':
+     rows=data.get('rows',[])
+     try:
+      if not isinstance(rows,list) or not rows or any(not isinstance(r,list) or len(r)!=4 or not all(isinstance(v,str) for v in r) for r in rows):raise ValueError('Invalid game mappings')
+      if len({r[0] for r in rows})!=len(rows) or any(not r[0] for r in rows):raise ValueError('Game names must be unique and nonempty.')
+      for row in rows:uri(row[3])
+      self.table.setRowCount(0)
+      for row in rows:self.add(row)
+      self.persist()
+     except ValueError as e:self.log.setText(str(e))
+    elif action=='start':self.start_vision()
+    elif action=='stop':self.stop_vision()
+    elif action=='dependencies':self.install_vision()
+    elif action=='images':
+     self.stop_vision()
+     try:
+      for file in data.get('paths',[]):
+       path=Path(file)
+       if path.is_file() and path.suffix.lower() in ('.png','.jpg','.jpeg','.webp') and path.stat().st_size<=20*1024*1024:self.stage(str(path),path.read_bytes())
+      self.vision_status.setText('References saved. Start capture to index.')
+     except OSError as e:self.vision_status.setText(str(e))
+    elif action=='archive':
+     path=Path(data.get('path',''))
+     if path.is_file():
+      def work():
+       total=used=0
+       with tarfile.open(path,'r:*') as t:
+        for m in t:
+         if not m.isfile() or Path(m.name).suffix.lower()!='.png':continue
+         total+=1
+         if not any('mech' in p.lower() for p in Path(m.name).parts[:-1]) or m.size>20*1024*1024:continue
+         f=t.extractfile(m)
+         if f:self.stage(m.name,f.read());used+=1
+       return total,used
+      self.stop_vision()
+      self.job(work,lambda r:self.vision_status.setText(f'Found {r[0]} blueprints; staged {r[1]} mech candidates. Start capture to index.'))
    request=ROOT/'dashboard-game.request'
    if request.exists() and not self.busy:
     data=load(request.name,{})
