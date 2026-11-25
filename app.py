@@ -53,8 +53,12 @@ class Spotify:
   if 'code' not in result:raise RuntimeError('Spotify sign-in cancelled or timed out.')
   self.token={};self.exchange(dict(client_id=client,grant_type='authorization_code',code=result['code'][0],redirect_uri=redirect,code_verifier=verifier))
  def call(self,path,method='GET',body=None):
-  if not self.client or not self.token.get('refresh_token'):raise RuntimeError('Connect Spotify in Settings first.')
-  if time.time()>self.token.get('expires_at',0)-60:self.exchange(dict(client_id=self.client,grant_type='refresh_token',refresh_token=self.token['refresh_token']))
+  import fcntl
+  with open(ROOT/'spotify-token.lock','a') as guard:
+   fcntl.flock(guard,fcntl.LOCK_EX)
+   self.token=load('token.json',{})
+   if not self.client or not self.token.get('refresh_token'):raise RuntimeError('Connect Spotify in Settings first.')
+   if time.time()>self.token.get('expires_at',0)-60:self.exchange(dict(client_id=self.client,grant_type='refresh_token',refresh_token=self.token['refresh_token']))
   req=urllib.request.Request('https://api.spotify.com/v1/me/player'+path,method=method,headers={'Authorization':'Bearer '+self.token['access_token'],'Content-Type':'application/json'},data=json.dumps(body).encode() if body is not None else None)
   try:
    with urllib.request.urlopen(req,timeout=10) as r:
@@ -267,9 +271,6 @@ class Window(QMainWindow):
        if device:self.device.setCurrentText(device['name']);self.persist()
      self.last_dashboard_player=time.monotonic()
      self.job(task,receive)
-   if not self.busy and self.sp.client and self.sp.token.get('refresh_token') and time.monotonic()-getattr(self,'last_dashboard_player',0)>12:
-    self.last_dashboard_player=time.monotonic()
-    self.job(self.dashboard_player_state,lambda result:save('dashboard-player.json',dict(time=time.time(),**result)))
    request=ROOT/'dashboard-show.request'
    if request.exists():
     fresh=time.time()-request.stat().st_mtime<15
