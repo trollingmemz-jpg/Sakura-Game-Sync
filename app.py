@@ -81,7 +81,7 @@ class Window(QMainWindow):
   for label,fn in [('Add game',lambda:self.add(['New game','','',''])),('Remove selected',self.remove),('Save mappings',self.persist),('Play selected',self.manual),('Retry detection',self.retry)]:
    b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
   layout.addLayout(bar); settings=QGroupBox('Spotify connection');f=QFormLayout(settings);self.client=QLineEdit(self.sp.client);self.client.setPlaceholderText('Spotify developer application client ID');f.addRow('Client ID',self.client);self.device=QComboBox();self.device.setEditable(True);self.device.addItem(self.cfg.get('device',''));f.addRow('Playback device (blank = active)',self.device);b=QPushButton('Connect Spotify');b.clicked.connect(self.login);r=QPushButton('Refresh devices');r.clicked.connect(self.devices);f.addRow(b,r);layout.addWidget(settings)
-  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False
+  self.vision=None;self.last_mech=0;self.last_frame=0;self.combat_retry=0;self.last_switch=0;self.retry_after=0;self.hits=0;self.capture_requested=False;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   group=QGroupBox('Adaptive combat — experimental');form=QFormLayout(group)
   self.adaptive=QCheckBox('Enable mech soundtrack');self.adaptive.setChecked(self.cfg.get('adaptive',False));form.addRow(self.adaptive)
   self.combat=QLineEdit(self.cfg.get('combat',''));form.addRow('Combat playlist URL',self.combat)
@@ -113,6 +113,8 @@ class Window(QMainWindow):
     return old
    def restart(_):
     self.quitting=True
+    if self.vision:self.vision.stop()
+    lock.unlock()
     os.execv(sys.executable,[sys.executable,str(root/'app.py')])
    self.job(apply,restart)
   self.job(check,ready)
@@ -161,16 +163,23 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
-   self.last_mech=0;self.last_frame=0;self.capture_requested=True;self.vision.start()
+   self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.capture_requested=True;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
-  self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0
+  self.capture_requested=False;self.last_mech=0;self.last_frame=0;self.hits=0;self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if self.vision:self.vision.stop()
  def on_mech(self,score):
   if not self.capture_requested:return
   self.last_frame=time.monotonic()
   self.hits=self.hits+1 if score>=self.threshold.value() else 0
-  if self.hits>=2:self.last_mech=self.last_frame
+  if score>=self.threshold.value():
+   self.clear_since=None
+   if self.hits>=2:
+    self.last_mech=self.last_frame;self.combat_latched=True
+  else:
+   if self.clear_since is None:self.clear_since=self.last_frame
+   if self.last_frame-self.clear_since>=30:
+    self.combat_latched=False;self.combat_sent=False
   self.vision_status.setText(f'Matching features: {int(score)} | '+('MECH DETECTED' if score>=self.threshold.value() else 'Scanning'))
   if self.hits>=2 and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
  def add(self,row):
@@ -211,16 +220,20 @@ class Window(QMainWindow):
  def manual(self):
   i=self.table.currentRow()
   if i>=0 and not self.busy and self.persist():self.play(self.rows[i])
- def retry(self):self.active=None;self.count=0;self.tick()
+ def retry(self):self.active=None;self.count=0;self.combat_sent=False;self.tick()
  def tick(self):
   if self.busy:return
   found=scan(self.rows);now=time.monotonic()
   target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop')
   self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
-  if 'Trailmakers' not in found and self.capture_requested:self.stop_vision()
+  if 'Trailmakers' not in found:
+   if self.capture_requested:self.stop_vision()
+   self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if not self.enabled.isChecked():self.active=None;self.candidate=None;self.count=0;return
   combat='Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested
-  if combat and self.last_mech and now-self.last_mech<30:target='Mech combat'
+  if combat and self.combat_latched:
+   target='Mech combat'
+   if self.combat_sent:return
   if target==self.active:self.candidate=None;self.count=0;return
   if target!=self.candidate:self.candidate=target;self.count=1
   else:self.count+=1
@@ -237,10 +250,14 @@ class Window(QMainWindow):
   self.retry_after=now+10
   def done(_):
    self.active=target;self.last_switch=time.monotonic();self.retry_after=0
+  if target=='Mech combat':self.combat_sent=True
   self.job(lambda:self.sp.play(playlist,device,shuffle),done)
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
   else:self.hide();e.ignore()
  def quit(self):self.stop_vision();self.quitting=True;QApplication.quit()
 if __name__=='__main__':
- app=QApplication(sys.argv);app.setQuitOnLastWindowClosed(False);w=Window();w.show() if '--background' not in sys.argv else None;sys.exit(app.exec())
+ from PySide6.QtCore import QLockFile
+ app=QApplication(sys.argv);lock=QLockFile(str(ROOT/'instance.lock'));lock.setStaleLockTime(0)
+ if not lock.tryLock(0):sys.exit(0)
+ app.setQuitOnLastWindowClosed(False);w=Window();w.show() if '--background' not in sys.argv else None;sys.exit(app.exec())
