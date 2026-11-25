@@ -26,24 +26,28 @@ class Vision(QObject):
  def start(self):
   if not self.refs:raise RuntimeError('Import mech references first.')
   self.stop()
-  helper=Path(__file__).with_name('portal_capture.py')
-  self.proc=subprocess.Popen(['/usr/bin/python3',str(helper)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
-  proc=self.proc;gen=self.generation
-  def read_exact(n):
-   data=bytearray()
-   while len(data)<n:
-    chunk=proc.stdout.read(n-len(data))
-    if not chunk:return None
-    data.extend(chunk)
-   return bytes(data)
+  gen=self.generation
   def reader():
    try:
+    import ctypes,ctypes.wintypes as wt,psutil,cv2,numpy as np
+    from PIL import ImageGrab
+    user=ctypes.windll.user32
     while gen==self.generation:
-     data=read_exact(960*540*3)
-     if data is None:break
-     self.portal_frame.emit((gen,data))
-   finally:
-    if gen==self.generation:self.report.emit('Window capture ended: '+proc.stderr.read().decode(errors='replace')[-800:])
+     hwnd=user.GetForegroundWindow();pid=wt.DWORD()
+     user.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+     try:match='trailmakers' in psutil.Process(pid.value).name().lower()
+     except (psutil.Error,OSError):match=False
+     if match and user.IsWindowVisible(hwnd) and not user.IsIconic(hwnd):
+      rc=wt.RECT();origin=wt.POINT(0,0)
+      if user.GetClientRect(hwnd,ctypes.byref(rc)) and user.ClientToScreen(hwnd,ctypes.byref(origin)):
+       w=rc.right-rc.left;h=rc.bottom-rc.top
+       if w>0 and h>0:
+        # Foreground client-area capture only; do not capture when another app is focused.
+        im=ImageGrab.grab(bbox=(origin.x,origin.y,origin.x+w,origin.y+h),all_screens=True)
+        if user.GetForegroundWindow()==hwnd and gen==self.generation:
+         data=cv2.resize(np.asarray(im.convert('RGB')),(960,540)).tobytes();self.portal_frame.emit((gen,data))
+     time.sleep(.5)
+   except Exception as e:self.report.emit('Windows capture: '+str(e))
   threading.Thread(target=reader,daemon=True).start()
  def stop(self):
   self.generation+=1
