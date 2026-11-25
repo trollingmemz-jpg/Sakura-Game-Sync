@@ -78,6 +78,7 @@ class CombatHue(QWidget):
  def __init__(self):
   super().__init__(None,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.WindowTransparentForInput|Qt.WindowType.WindowDoesNotAcceptFocus)
   self.setWindowTitle('Sakura Combat Hue')
+  self.setObjectName('SakuraCombatHue')
   self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
   self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
   self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -101,7 +102,7 @@ class CombatHue(QWidget):
    self.winId()
    self.windowHandle().setScreen(screen)
    self.setGeometry(screen.geometry())
-   self.showFullScreen()
+   self.show()
    self.raise_()
 class Window(QMainWindow):
  def __init__(self):
@@ -229,8 +230,6 @@ class Window(QMainWindow):
    if self.vision is None:
     self.vision=Vision(self);self.vision.report.connect(self.vision_status.setText);self.vision.detected.connect(self.on_mech)
    self.vision.load(list(self.reference_dir().glob('*')))
-   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
-   if screen is not None:self.vision.capture.setScreen(screen)
    self.last_mech=0;self.last_frame=0;self.hits=0;self.clear_since=None;self.hit_since=None;self.evidence=[];self.capture_requested=True;self.vision.start()
   except Exception as e:self.capture_requested=False;self.vision_status.setText(str(e))
  def stop_vision(self):
