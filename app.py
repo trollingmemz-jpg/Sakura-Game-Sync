@@ -245,16 +245,13 @@ class Window(QMainWindow):
   self.evidence=[t for t in self.evidence if now-t<=8]
   if score>=threshold:
    self.evidence.append(now)
-  if not self.combat_latched and len(self.evidence)>=3:
-   self.combat_latched=True;self.clear_since=None;self.last_mech=now
-  if self.combat_latched:
-   if score>=max(5,int(threshold*.7)):
-    self.last_mech=now;self.clear_since=None
-   else:
-    if self.clear_since is None:self.clear_since=now
-    if now-self.clear_since>=45:
-     self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
-  status='COMBAT LOCKED' if self.combat_latched else ('Confirming mech' if self.evidence else 'Scanning')
+  if len(self.evidence)>=3:
+   if not self.combat_latched:
+    self.combat_latched=True;self.clear_since=None
+   if score>=threshold:self.last_mech=now
+  if self.combat_latched and now-self.last_mech>=20:
+   self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
+  status=f'COMBAT LOCKED | release in {max(0,int(20-(now-self.last_mech)))}s' if self.combat_latched else ('Confirming mech' if self.evidence else 'Scanning')
   self.vision_status.setText(f'Matching features: {int(score)} | {status} | Evidence: {min(3,len(self.evidence))}/3')
   if self.combat_latched and not self.combat_sent and self.enabled.isChecked() and self.adaptive.isChecked() and not self.busy:self.tick()
  def add(self,row):
@@ -306,6 +303,8 @@ class Window(QMainWindow):
    self.combat_latched=False;self.combat_sent=False;self.clear_since=None
   if not self.enabled.isChecked():self.active=None;self.candidate=None;self.count=0;return
   combat='Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested
+  if self.combat_latched and now-self.last_mech>=20:
+   self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
   if combat and self.combat_latched:
    target='Mech combat'
    if self.combat_sent:return
@@ -314,7 +313,6 @@ class Window(QMainWindow):
   else:self.count+=1
   if target!='Mech combat' and self.count<2:return
   if now<self.retry_after:return
-  if self.active=='Mech combat' and target=='Trailmakers' and now-self.last_switch<60:return
   if target=='Desktop' and (self.active is None or not self.fallback.isChecked()):self.active=target;return
   row=next((r for r in self.rows if r[0]==target),None)
   playlist=self.combat.text().strip() if target=='Mech combat' else (row[3] if row else '')
