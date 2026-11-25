@@ -33,7 +33,9 @@ class Spotify:
  def __init__(self):self.token=load('token.json',{}); self.client=''
  def exchange(self,data):
   req=urllib.request.Request('https://accounts.spotify.com/api/token',data=urllib.parse.urlencode(data).encode())
-  with urllib.request.urlopen(req,timeout=12) as r: t=json.load(r)
+  with urllib.request.urlopen(req,timeout=12) as r:
+   try:t=json.load(r)
+   except ValueError as e:raise RuntimeError(f'Spotify token endpoint returned invalid JSON (HTTP {r.status}).') from e
   self.token={**self.token,**t,'expires_at':time.time()+t['expires_in']};save('token.json',self.token)
  def login(self,client):
   self.client=client; verifier=secrets.token_urlsafe(64); state=secrets.token_urlsafe(24); challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('='); redirect='http://127.0.0.1:8700/callback'; result={}
@@ -56,7 +58,10 @@ class Spotify:
   req=urllib.request.Request('https://api.spotify.com/v1/me/player'+path,method=method,headers={'Authorization':'Bearer '+self.token['access_token'],'Content-Type':'application/json'},data=json.dumps(body).encode() if body is not None else None)
   try:
    with urllib.request.urlopen(req,timeout=10) as r:
-    b=r.read();return json.loads(b) if b else {}
+    b=r.read()
+    if not b.strip() or r.status==204:return {}
+    try:return json.loads(b)
+    except ValueError as e:raise RuntimeError(f'Spotify returned non-JSON HTTP {r.status} for {method} {path or "/"}: '+b.decode(errors='replace')[:160]) from e
   except urllib.error.HTTPError as e:raise RuntimeError(f'Spotify HTTP {e.code}: '+e.read().decode(errors='replace')[:250]) from e
  def play(self,playlist,device,shuffle):
   devices=self.call('/devices').get('devices',[]); d=next((d for d in devices if d['name']==device),None) if device else next((d for d in devices if d.get('is_active')),None)
