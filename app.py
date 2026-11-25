@@ -129,9 +129,10 @@ class Window(QMainWindow):
   ix=self.hud_screen.findText(self.cfg.get('hud_screen',''))
   if ix>=0:self.hud_screen.setCurrentIndex(ix)
   form.addRow('Trailmakers monitor',self.hud_screen)
-  self.hud=QLabel(None,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.WindowTransparentForInput|Qt.WindowType.WindowDoesNotAcceptFocus)
-  self.hud.setWindowTitle('Sakura Combat Overlay');self.hud.setObjectName('SakuraCombatOverlay');self.hud.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating);self.hud.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-  self.hue=CombatHue();self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
+  self.hue=CombatHue()
+  self.hud=QLabel(self.hue)
+  self.hud.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+  self.hud.setFixedSize(300,76);self.hud.setAlignment(Qt.AlignmentFlag.AlignCenter)
   self.hud_enabled.toggled.connect(self.refresh_hud);self.hud_screen.currentIndexChanged.connect(self.refresh_hud)
   self.hud_timer=QTimer(self);self.hud_timer.timeout.connect(self.refresh_hud);self.hud_timer.start(40)
   layout.addWidget(group)
@@ -203,7 +204,7 @@ class Window(QMainWindow):
   if not self.hud_enabled.isChecked() or not self.capture_requested:
    self.hud.hide();self.hue.hide();return
   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
-  if screen is None:self.hud.hide();return
+  if screen is None:self.hud.hide();self.hue.hide();return
   locked=self.combat_latched and time.monotonic()-self.last_mech<20
   stale=not self.last_frame or time.monotonic()-self.last_frame>5
   n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
@@ -215,10 +216,9 @@ class Window(QMainWindow):
   bg=f'rgba({int(48+40*pulse)},18,24,215)' if locked else 'rgba(15,42,43,205)'
   self.hud.setStyleSheet('QLabel{background:'+bg+';border:2px solid '+color+';border-radius:8px;color:'+color+';font-size:13px;font-weight:600;}')
   self.hud.setText('SAKURA  /  '+state+'\nEvidence '+str(n)+'/3  |  '+('Combat playlist' if self.active=='Mech combat' else 'Normal soundtrack'))
-  self.hud.winId()
-  if self.hud.windowHandle().screen()!=screen:self.hud.windowHandle().setScreen(screen)
-  g=screen.availableGeometry();self.hud.move(g.x()+g.width()-self.hud.width()-20,g.y()+24)
+  self.hud.move(max(0,self.hue.width()-self.hud.width()-20),24)
   if not self.hud.isVisible():self.hud.show()
+  self.hud.raise_()
  def start_vision(self):
   if self.busy or not self.persist():return
   try:
