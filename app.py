@@ -70,6 +70,13 @@ class Spotify:
   current=self.call('')
   if (current.get('context') or {}).get('uri')==desired and (current.get('device') or {}).get('id')==d['id'] and current.get('is_playing'):return
   self.call('/play?'+q,'PUT',{'context_uri':desired})
+  actual={}
+  for delay in (1,2,3):
+   time.sleep(delay)
+   actual=self.call('')
+   if (actual.get('context') or {}).get('uri')==desired and (actual.get('device') or {}).get('id')==d['id'] and actual.get('is_playing'):break
+  else:
+   raise RuntimeError('Spotify playback not confirmed: requested '+desired+' on '+d['name']+'; actual context '+str((actual.get('context') or {}).get('uri'))+' on '+str((actual.get('device') or {}).get('name'))+'; playing='+str(actual.get('is_playing')))
   try:self.call('/shuffle?'+q+'&state='+str(shuffle).lower(),'PUT')
   except RuntimeError:pass
 class Bridge(QObject):
@@ -310,7 +317,7 @@ class Window(QMainWindow):
  def manual(self):
   i=self.table.currentRow()
   if i>=0 and not self.busy and self.persist():self.play(self.rows[i])
- def retry(self):self.active=None;self.count=0;self.combat_sent=False;self.tick()
+ def retry(self):self.active=None;self.count=0;self.combat_sent=False;self.retry_after=0;self.tick()
  def tick(self):
   now=time.monotonic()
   if self.combat_latched and now-self.last_mech>=20:
@@ -346,6 +353,8 @@ class Window(QMainWindow):
   def done(_):
    self.active=target;self.last_switch=time.monotonic();self.retry_after=0
    if target=='Mech combat' and self.combat_latched:self.combat_sent=True
+   self.log.setText('Spotify confirmed: '+target+' ('+uri(playlist)+') on '+(device or 'active device'))
+  self.log.setText('Switching Spotify to '+target+' ('+uri(playlist)+') on '+(device or 'active device')+'...')
   self.job(lambda:self.sp.play(playlist,device,shuffle),done)
  def closeEvent(self,e):
   if self.quitting or not QSystemTrayIcon.isSystemTrayAvailable():e.accept()
