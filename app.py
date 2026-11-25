@@ -204,10 +204,10 @@ class Window(QMainWindow):
    self.hud.hide();self.hue.hide();return
   screen=next((x for x in QGuiApplication.screens() if x.name()==self.hud_screen.currentText()),None)
   if screen is None:self.hud.hide();return
-  locked=self.combat_latched or self.active=='Mech combat'
+  locked=self.combat_latched and time.monotonic()-self.last_mech<20
   stale=not self.last_frame or time.monotonic()-self.last_frame>5
   n=min(3,sum(time.monotonic()-t<=8 for t in self.evidence))
-  state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('CONFIRMING MECH' if n else 'SCANNING'))
+  state='CAPTURE WAITING' if stale else ('COMBAT LOCKED' if locked else ('RESTORING MUSIC' if self.active=='Mech combat' else ('CONFIRMING MECH' if n else 'SCANNING')))
   pulse=(1+math.sin(time.monotonic()*math.tau/2.4))/2
   self.hue.mix+=((1. if locked else 0.)-self.hue.mix)*.14
   self.hue.pulse=pulse;self.hue.display_on(screen);self.hue.update()
@@ -294,8 +294,11 @@ class Window(QMainWindow):
   if i>=0 and not self.busy and self.persist():self.play(self.rows[i])
  def retry(self):self.active=None;self.count=0;self.combat_sent=False;self.tick()
  def tick(self):
+  now=time.monotonic()
+  if self.combat_latched and now-self.last_mech>=20:
+   self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
   if self.busy:return
-  found=scan(self.rows);now=time.monotonic()
+  found=scan(self.rows)
   target=self.active if self.active in found else next((r[0] for r in self.rows if r[0] in found),'Desktop')
   self.status.setText('Detected: '+(', '.join(sorted(found)) or 'Desktop')+'  •  '+('Automatic switching on' if self.enabled.isChecked() else 'Manual mode'))
   if 'Trailmakers' not in found:
@@ -305,6 +308,7 @@ class Window(QMainWindow):
   combat='Trailmakers' in found and self.adaptive.isChecked() and self.capture_requested
   if self.combat_latched and now-self.last_mech>=20:
    self.combat_latched=False;self.combat_sent=False;self.evidence=[];self.clear_since=None
+  if combat and not self.combat_latched:target='Trailmakers'
   if combat and self.combat_latched:
    target='Mech combat'
    if self.combat_sent:return
