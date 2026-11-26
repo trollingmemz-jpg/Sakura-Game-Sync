@@ -184,6 +184,15 @@ class Window(QMainWindow):
      if isinstance(color,list) and len(color)==3 and all(type(x)==int and 0<=x<=255 for x in color):profile[key]=tuple(color)
     for key in ('keyboard','ram','mouse'):
      profile[key]=bool(raw.get(key,True))
+    overrides=raw.get('mobile_overrides',{})
+    if isinstance(overrides,dict):
+     profile['mobile_overrides']={}
+     for key in ('keyboard','ram','mouse'):
+      item=overrides.get(key,{})
+      if not isinstance(item,dict):continue
+      color=item.get('color');level=item.get('brightness')
+      if isinstance(color,list) and len(color)==3 and all(type(x)==int and 0<=x<=255 for x in color) and type(level)==int and 0<=level<=100:
+       profile['mobile_overrides'][key]={'color':tuple(color),'brightness':level}
    profiles=load('game-profiles.json',{})
    selected=profiles.get(getattr(self,'detected_game','Desktop'),{}) if isinstance(profiles,dict) else {}
    if profile.get('mode')=='auto' and isinstance(selected,dict) and selected.get('enabled') and selected.get('rgb_enabled'):
