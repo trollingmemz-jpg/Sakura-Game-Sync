@@ -40,6 +40,12 @@ class RGBSync(QObject):
    target_base=profile.get('manual',(244,120,215)) if profile.get('mode')=='manual' else profile.get('scanning',(179,108,255)) if scanning else profile.get('idle',(244,120,215))
    base=tuple(a+(b-a)*.35 if abs(b-a)>=.5 else float(b) for a,b in zip(base,target_base))
    rgb=tuple(round((a*(1-mix)+b*mix*strength)*profile.get('brightness',100)/100) for a,b in zip(base,profile.get('combat',(240,24,134))))
+   overrides=profile.get('mobile_overrides',{})
+   def device_rgb(key):
+    item=overrides.get(key)
+    return tuple(round(c*item['brightness']/100) for c in item['color']) if item else rgb
+   sdk_rgb=(device_rgb('keyboard'),device_rgb('ram'))
+   mouse_rgb=device_rgb('mouse')
    errors=[]
    if (keyboard or ram) and client is None and now>=retry:
     retry=now+8
@@ -51,14 +57,16 @@ class RGBSync(QObject):
        devices.append(d) # OpenLinkHub exposes only Direct mode; already selected
     except Exception as e:
      disconnect();errors.append('SDK: '+str(e))
-   if client and rgb!=last_sdk:
+   if client and sdk_rgb!=last_sdk:
     try:
      from openrgb.utils import RGBColor
-     for d in devices:d.set_colors([RGBColor(*rgb) for _ in d.leds],fast=True)
-     last_sdk=rgb
+     for d in devices:
+      value=sdk_rgb[0] if int(d.type)==5 else sdk_rgb[1]
+      d.set_colors([RGBColor(*value) for _ in d.leds],fast=True)
+     last_sdk=sdk_rgb
     except Exception as e:
      disconnect();retry=now+8;errors.append('SDK: '+str(e))
-   if mouse and rgb!=last_mouse and now>=mouse_retry:
+   if mouse and mouse_rgb!=last_mouse and now>=mouse_retry:
     try:
      if mouse_path is None or not mouse_path.exists():
       mouse_path=None
@@ -67,9 +75,9 @@ class RGBSync(QObject):
      if mouse_path is None:raise RuntimeError('Harpoon not found')
      if not stat.S_ISFIFO(mouse_path.stat().st_mode):raise RuntimeError('Not a ckb command FIFO')
      fd=os.open(mouse_path,os.O_WRONLY|os.O_NONBLOCK)
-     try:os.write(fd,('rgb %02x%02x%02x\n'%rgb).encode())
+     try:os.write(fd,('rgb %02x%02x%02x\n'%mouse_rgb).encode())
      finally:os.close(fd)
-     last_mouse=rgb
+     last_mouse=mouse_rgb
     except Exception as e:mouse_retry=now+3;errors.append('Mouse: '+str(e))
    if errors:report(' | '.join(errors))
    elif (keyboard or ram) and client is None:report('Waiting for OpenLinkHub SDK / Python dependency')
